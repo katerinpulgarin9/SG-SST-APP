@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+.env
+.DS_Store
+Thumbs.db
+salida/01_Word/*
+salida/02_Excel/*
+!salida/01_Word/.gitkeep
+!salida/02_Excel/.gitkeep
+plantillas/usuario/*
+!plantillas/usuario/.gitkeep
+*.zip
