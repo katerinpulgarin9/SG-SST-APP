@@ -331,49 +331,109 @@ def _ooxml_header_meta_patterns(ctx: dict[str, str]) -> list[tuple[re.Pattern[st
     return pats
 
 
+def _resolve_media_target(target: str, names: set[str], rel_name: str) -> str | None:
+    """Normaliza Target de .rels (Word/Excel) a una ruta real del zip."""
+    t = (target or "").replace("\\", "/").strip()
+    if not t:
+        return None
+    candidates = [
+        t.lstrip("/"),
+        t,
+    ]
+    # Relativo al archivo .rels (p.ej. ../media/image1.jpeg desde word/_rels/)
+    if t.startswith("../") or t.startswith("./") or not t.startswith("/") and "/" not in t.split("/")[0]:
+        base = str(Path(rel_name).parent).replace("\\", "/")
+        # parent of _rels is word/ or xl/drawings/
+        if base.endswith("/_rels"):
+            base = base[: -len("/_rels")]
+        joined = str((Path(base) / t).as_posix())
+        # normalize .. 
+        parts: list[str] = []
+        for part in joined.split("/"):
+            if part in ("", "."):
+                continue
+            if part == "..":
+                if parts:
+                    parts.pop()
+                continue
+            parts.append(part)
+        candidates.append("/".join(parts))
+    if "media/" in t.lower():
+        # Excel a veces usa /xl/media/... o media/image1.jpeg
+        if t.lstrip("/").startswith("xl/media/") or t.lstrip("/").startswith("word/media/"):
+            candidates.append(t.lstrip("/"))
+        elif "xl/" in rel_name.replace("\\", "/").lower():
+            candidates.append("xl/" + t.lstrip("/").removeprefix("xl/"))
+            if t.lower().startswith("media/") or "/media/" in t.lower():
+                candidates.append("xl/media/" + Path(t).name)
+        elif "word/" in rel_name.replace("\\", "/").lower():
+            candidates.append("word/media/" + Path(t).name)
+    for cand in candidates:
+        c = cand.lstrip("/")
+        if c in names:
+            return c
+    return None
+
+
 def _scrub_ooxml_file(path: Path, ctx: dict[str, str], logo_path: Path | None = None) -> None:
-    """Reemplazo en XML + sustitucion de logos embebidos en encabezado/pie."""
+    """Reemplazo en XML + sustitucion de logos embebidos (Word y Excel)."""
     if not path.exists():
         return
     pats = _ooxml_scrub_patterns(ctx) + _ooxml_header_meta_patterns(ctx)
 
-    # Detectar que archivos media se usan en headers/footers (logos de plantilla)
     logo_media_targets: set[str] = set()
     with zipfile.ZipFile(path, "r") as zin:
         names = set(zin.namelist())
         for rel_name in list(names):
-            low = rel_name.lower()
-            if not (
-                low.startswith("word/_rels/header")
-                or low.startswith("word/_rels/footer")
-                or low == "word/_rels/document.xml.rels"
-            ):
-                continue
+            low = rel_name.replace("\\", "/").lower()
             if not low.endswith(".rels"):
+                continue
+            # Word headers/footers + Excel drawings (logos en planillas)
+            useful = (
+                "/_rels/header" in low
+                or "/_rels/footer" in low
+                or "xl/drawings/_rels/" in low
+                or low.endswith("drawing1.xml.rels")
+                or "drawings/_rels/" in low
+            )
+            if not useful:
                 continue
             try:
                 rel_xml = zin.read(rel_name).decode("utf-8")
             except Exception:
                 continue
-            # Solo headers/footers: sus .rels apuntan a media/imageN
-            if "header" in low or "footer" in low:
-                for m in re.finditer(r'Target="([^"]*media/[^"]+)"', rel_xml, re.I):
-                    target = m.group(1).replace("\\", "/")
-                    # Relativo a word/
-                    if target.startswith("../"):
-                        media_path = "word/" + target[3:]
-                    elif target.startswith("media/"):
-                        media_path = "word/" + target
-                    else:
-                        media_path = target
-                    # Normalizar
-                    for cand in (media_path, media_path.lstrip("/")):
-                        if cand in names:
-                            logo_media_targets.add(cand)
-        # Si no se detecto nada pero hay una sola imagen, es casi seguro el logo
-        medias = [n for n in names if "/media/" in n.lower() and n.lower().endswith((".jpg", ".jpeg", ".png"))]
+            for m in re.finditer(
+                r'Type="[^"]*image"[^>]*Target="([^"]+)"|Target="([^"]*media/[^"]+)"[^>]*Type="[^"]*image"',
+                rel_xml,
+                re.I,
+            ):
+                target = m.group(1) or m.group(2)
+                resolved = _resolve_media_target(target, names, rel_name)
+                if resolved:
+                    logo_media_targets.add(resolved)
+            # Fallback mas simple: cualquier Target a media/
+            for m in re.finditer(r'Target="([^"]*media/[^"]+)"', rel_xml, re.I):
+                resolved = _resolve_media_target(m.group(1), names, rel_name)
+                if resolved and resolved.lower().endswith((".jpg", ".jpeg", ".png")):
+                    logo_media_targets.add(resolved)
+
+        medias = [
+            n
+            for n in names
+            if "/media/" in n.lower() and n.lower().endswith((".jpg", ".jpeg", ".png"))
+        ]
+        # Excel: image1 suele ser el logo FOREST GREEN
+        if not logo_media_targets:
+            for n in medias:
+                if re.search(r"image1\.(jpg|jpeg|png)$", n, re.I):
+                    logo_media_targets.add(n)
         if not logo_media_targets and len(medias) == 1:
             logo_media_targets.add(medias[0])
+        # Si hay varias en xl/media y ninguna elegida, reemplazar la primera (logo)
+        if not logo_media_targets and medias:
+            xl_medias = sorted(n for n in medias if n.lower().startswith("xl/media/"))
+            if xl_medias:
+                logo_media_targets.add(xl_medias[0])
 
     buf = io.BytesIO()
     changed = False
@@ -492,15 +552,7 @@ def rellenar_excel(
                     nuevo = _reemplazar_texto(cell.value, ctx)
                     if nuevo != cell.value:
                         cell.value = nuevo
-        logo = _logo_path(empresa)
-        if logo and not list(getattr(ws, "_images", []) or []):
-            try:
-                img = XLImage(str(logo))
-                img.width = 90
-                img.height = 55
-                ws.add_image(img, "A1")
-            except Exception:
-                pass
+        # El logo se reemplaza en el XML (xl/media), no se agrega otro encima.
     out_path.parent.mkdir(parents=True, exist_ok=True)
     wb.save(str(out_path))
     logo = _logo_path(empresa)
