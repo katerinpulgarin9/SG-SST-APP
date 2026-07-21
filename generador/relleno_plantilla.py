@@ -235,18 +235,171 @@ def _ooxml_scrub_patterns(ctx: dict[str, str]) -> list[tuple[re.Pattern[str], st
     return pats
 
 
-def _scrub_ooxml_file(path: Path, ctx: dict[str, str]) -> None:
-    """Reemplazo brutal en XML interno del paquete Office."""
+def _logo_bytes_for_ext(logo_path: Path, ext: str) -> bytes | None:
+    """Convierte el logo de la empresa al formato del media embebido (jpg/png)."""
+    try:
+        from PIL import Image
+    except Exception:
+        return logo_path.read_bytes() if logo_path.suffix.lower() == f".{ext}" else None
+    try:
+        img = Image.open(logo_path)
+        if img.mode in ("RGBA", "LA", "P"):
+            background = Image.new("RGB", img.size, (255, 255, 255))
+            if img.mode == "P":
+                img = img.convert("RGBA")
+            background.paste(img, mask=img.split()[-1] if img.mode == "RGBA" else None)
+            img = background
+        elif img.mode != "RGB":
+            img = img.convert("RGB")
+        # Limitar tamano tipico de encabezado
+        img.thumbnail((220, 120))
+        bio = io.BytesIO()
+        ext_l = ext.lower().lstrip(".")
+        if ext_l in {"jpg", "jpeg"}:
+            img.save(bio, format="JPEG", quality=90)
+        elif ext_l == "png":
+            img.save(bio, format="PNG")
+        else:
+            img.save(bio, format="PNG")
+        return bio.getvalue()
+    except Exception:
+        try:
+            return logo_path.read_bytes()
+        except Exception:
+            return None
+
+
+def _blank_logo_bytes(ext: str) -> bytes:
+    """Imagen blanca pequena para quitar logos de ejemplo si no hay logo propio."""
+    from PIL import Image
+
+    img = Image.new("RGB", (160, 80), (255, 255, 255))
+    bio = io.BytesIO()
+    ext_l = ext.lower().lstrip(".")
+    if ext_l in {"jpg", "jpeg"}:
+        img.save(bio, format="JPEG", quality=85)
+    else:
+        img.save(bio, format="PNG")
+    return bio.getvalue()
+
+
+def _ooxml_header_meta_patterns(ctx: dict[str, str]) -> list[tuple[re.Pattern[str], str]]:
+    """Fecha / Version / Codigo FG-FOR-SST del encabezado de plantilla."""
+    fecha = xml_escape(_ctx_val(ctx, "fecha"))
+    version = xml_escape(_ctx_val(ctx, "version"))
+    codigo = xml_escape(_ctx_val(ctx, "codigo"))
+    gap = r"(?:\s|<[^>]+>)*"
+    pats: list[tuple[re.Pattern[str], str]] = []
+    # Fecha: 01/02/2026  (con posibles tags XML entre tokens)
+    pats.append(
+        (
+            re.compile(
+                rf"(Fecha{gap}:{gap})\d{{1,2}}{gap}/{gap}\d{{1,2}}{gap}/{gap}\d{{2,4}}",
+                re.I,
+            ),
+            rf"\g<1>{fecha}",
+        )
+    )
+    pats.append(
+        (
+            re.compile(
+                rf"(Versi(?:\u00f3|o)n{gap}:{gap})\d{{1,4}}",
+                re.I,
+            ),
+            rf"\g<1>{version}",
+        )
+    )
+    pats.append(
+        (
+            re.compile(
+                rf"(C\u00f3digo{gap}:{gap}|Codigo{gap}:{gap})FG{gap}-{gap}FOR{gap}-{gap}SST{gap}-{gap}\d+",
+                re.I,
+            ),
+            rf"\g<1>{codigo}",
+        )
+    )
+    # Codigo suelto FG-FOR-SST-39
+    pats.append(
+        (
+            re.compile(
+                rf"FG{gap}-{gap}FOR{gap}-{gap}SST{gap}-{gap}\d+",
+                re.I,
+            ),
+            codigo,
+        )
+    )
+    return pats
+
+
+def _scrub_ooxml_file(path: Path, ctx: dict[str, str], logo_path: Path | None = None) -> None:
+    """Reemplazo en XML + sustitucion de logos embebidos en encabezado/pie."""
     if not path.exists():
         return
-    pats = _ooxml_scrub_patterns(ctx)
+    pats = _ooxml_scrub_patterns(ctx) + _ooxml_header_meta_patterns(ctx)
+
+    # Detectar que archivos media se usan en headers/footers (logos de plantilla)
+    logo_media_targets: set[str] = set()
+    with zipfile.ZipFile(path, "r") as zin:
+        names = set(zin.namelist())
+        for rel_name in list(names):
+            low = rel_name.lower()
+            if not (
+                low.startswith("word/_rels/header")
+                or low.startswith("word/_rels/footer")
+                or low == "word/_rels/document.xml.rels"
+            ):
+                continue
+            if not low.endswith(".rels"):
+                continue
+            try:
+                rel_xml = zin.read(rel_name).decode("utf-8")
+            except Exception:
+                continue
+            # Solo headers/footers: sus .rels apuntan a media/imageN
+            if "header" in low or "footer" in low:
+                for m in re.finditer(r'Target="([^"]*media/[^"]+)"', rel_xml, re.I):
+                    target = m.group(1).replace("\\", "/")
+                    # Relativo a word/
+                    if target.startswith("../"):
+                        media_path = "word/" + target[3:]
+                    elif target.startswith("media/"):
+                        media_path = "word/" + target
+                    else:
+                        media_path = target
+                    # Normalizar
+                    for cand in (media_path, media_path.lstrip("/")):
+                        if cand in names:
+                            logo_media_targets.add(cand)
+        # Si no se detecto nada pero hay una sola imagen, es casi seguro el logo
+        medias = [n for n in names if "/media/" in n.lower() and n.lower().endswith((".jpg", ".jpeg", ".png"))]
+        if not logo_media_targets and len(medias) == 1:
+            logo_media_targets.add(medias[0])
+
     buf = io.BytesIO()
     changed = False
-    with zipfile.ZipFile(path, "r") as zin, zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zout:
+    with zipfile.ZipFile(path, "r") as zin, zipfile.ZipFile(
+        buf, "w", compression=zipfile.ZIP_DEFLATED
+    ) as zout:
         for info in zin.infolist():
             data = zin.read(info.filename)
-            name = info.filename.lower()
-            if name.endswith((".xml", ".rels")) and not name.endswith(".bin"):
+            name = info.filename
+            name_l = name.lower()
+
+            if name in logo_media_targets or name.replace("\\", "/") in logo_media_targets:
+                ext = Path(name).suffix.lstrip(".").lower()
+                nuevo_bytes = None
+                if logo_path and logo_path.exists():
+                    nuevo_bytes = _logo_bytes_for_ext(logo_path, ext)
+                if nuevo_bytes is None:
+                    try:
+                        nuevo_bytes = _blank_logo_bytes("jpg" if ext == "jpeg" else ext)
+                    except Exception:
+                        nuevo_bytes = None
+                if nuevo_bytes is not None:
+                    data = nuevo_bytes
+                    changed = True
+
+            elif name_l.endswith((".xml", ".rels")) and not name_l.endswith(".bin"):
                 try:
                     text = data.decode("utf-8")
                 except UnicodeDecodeError:
@@ -254,7 +407,10 @@ def _scrub_ooxml_file(path: Path, ctx: dict[str, str]) -> None:
                     continue
                 nuevo = text
                 for rx, rep in pats:
-                    nuevo2 = rx.sub(rep, nuevo)
+                    try:
+                        nuevo2 = rx.sub(rep, nuevo)
+                    except re.error:
+                        continue
                     if nuevo2 != nuevo:
                         changed = True
                         nuevo = nuevo2
@@ -305,7 +461,8 @@ def rellenar_word(
     doc = Document(str(out_path))
     _aplicar_documento_word(doc, ctx)
     doc.save(str(out_path))
-    _scrub_ooxml_file(out_path, ctx)
+    logo = _logo_path(empresa)
+    _scrub_ooxml_file(out_path, ctx, logo_path=logo)
     return out_path
 
 
@@ -337,5 +494,6 @@ def rellenar_excel(
                 pass
     out_path.parent.mkdir(parents=True, exist_ok=True)
     wb.save(str(out_path))
-    _scrub_ooxml_file(out_path, ctx)
+    logo = _logo_path(empresa)
+    _scrub_ooxml_file(out_path, ctx, logo_path=logo)
     return out_path

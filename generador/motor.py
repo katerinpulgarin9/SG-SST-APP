@@ -26,7 +26,13 @@ from generador.plantillas_index import (
     estado_plantillas_catalogo,
     listar_plantillas,
 )
-from generador.relleno_plantilla import rellenar_excel, rellenar_word, _scrub_ooxml_file, _contexto
+from generador.relleno_plantilla import (
+    rellenar_excel,
+    rellenar_word,
+    _scrub_ooxml_file,
+    _contexto,
+    _logo_path,
+)
 from generador.familias_documento import (
     COLUMNAS_EXCEL,
     contexto_actividad,
@@ -248,7 +254,11 @@ def generar_word_desde_plantilla(empresa: dict, doc_meta: dict, version: int, fe
         doc.save(str(out_path))
     # Segunda pasada anti FOREST GREEN (XML partido / encabezados)
     try:
-        _scrub_ooxml_file(out_path, _contexto(empresa, doc_meta, version, fecha))
+        _scrub_ooxml_file(
+            out_path,
+            _contexto(empresa, doc_meta, version, fecha),
+            logo_path=_logo_path(empresa),
+        )
     except Exception:
         pass
     return out_path
