@@ -535,6 +535,66 @@ def rellenar_word(
     return out_path
 
 
+
+def _cell_fill_hex(cell) -> str:
+    fill = getattr(cell, "fill", None)
+    if not fill or getattr(fill, "fill_type", None) != "solid":
+        return ""
+    color = getattr(fill, "fgColor", None)
+    if not color:
+        return ""
+    # Ignorar theme/indexed (no son hex reales)
+    if getattr(color, "type", None) not in ("rgb", None) and getattr(color, "type", None) != "rgb":
+        t = str(getattr(color, "type", ""))
+        if t and t != "rgb":
+            return ""
+    rgb = getattr(color, "rgb", None)
+    if not rgb or not isinstance(rgb, str):
+        return ""
+    hx = rgb[-6:].upper()
+    if len(hx) != 6 or any(c not in "0123456789ABCDEF" for c in hx):
+        return ""
+    return hx
+
+
+def _aplicar_colores_excel(wb, empresa: dict) -> None:
+    from openpyxl.styles import Font, PatternFill
+    from generador.colores_marca import (
+        colores_desde_logo,
+        elegir_tono_marca,
+        es_relleno_marca_plantilla,
+    )
+
+    logo = _logo_path(empresa)
+    palette = colores_desde_logo(logo)
+    fill_primary = PatternFill("solid", fgColor=palette["primary"])
+    fill_secondary = PatternFill("solid", fgColor=palette["secondary"])
+    fill_light = PatternFill("solid", fgColor=palette["light"])
+    on_pri = palette.get("on_primary", "FFFFFF")
+    for ws in wb.worksheets:
+        for row in ws.iter_rows():
+            for cell in row:
+                hx = _cell_fill_hex(cell)
+                if not hx or not es_relleno_marca_plantilla(hx):
+                    continue
+                nuevo = elegir_tono_marca(hx, palette)
+                if nuevo == palette["light"]:
+                    cell.fill = fill_light
+                elif nuevo == palette["secondary"]:
+                    cell.fill = fill_secondary
+                else:
+                    cell.fill = fill_primary
+                if nuevo in (palette["primary"], palette["secondary"]):
+                    prev = cell.font
+                    cell.font = Font(
+                        name=prev.name,
+                        size=prev.size,
+                        bold=prev.bold,
+                        italic=prev.italic,
+                        color=on_pri,
+                    )
+
+
 def rellenar_excel(
     plantilla: Path,
     empresa: dict,
@@ -552,7 +612,10 @@ def rellenar_excel(
                     nuevo = _reemplazar_texto(cell.value, ctx)
                     if nuevo != cell.value:
                         cell.value = nuevo
-        # El logo se reemplaza en el XML (xl/media), no se agrega otro encima.
+    try:
+        _aplicar_colores_excel(wb, empresa)
+    except Exception:
+        pass
     out_path.parent.mkdir(parents=True, exist_ok=True)
     wb.save(str(out_path))
     logo = _logo_path(empresa)

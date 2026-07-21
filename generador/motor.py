@@ -33,6 +33,7 @@ from generador.relleno_plantilla import (
     _contexto,
     _logo_path,
 )
+from generador.colores_marca import colores_desde_logo
 from generador.familias_documento import (
     COLUMNAS_EXCEL,
     contexto_actividad,
@@ -97,7 +98,22 @@ def _logo_path(empresa: dict) -> Optional[Path]:
     return p
 
 
+def _shade_word_cell(cell, hex_color: str) -> None:
+    """Relleno de celda Word (hex RRGGBB)."""
+    tc = cell._tc
+    tcPr = tc.get_or_add_tcPr()
+    for child in list(tcPr):
+        if child.tag == qn("w:shd"):
+            tcPr.remove(child)
+    shd = OxmlElement("w:shd")
+    shd.set(qn("w:val"), "clear")
+    shd.set(qn("w:color"), "auto")
+    shd.set(qn("w:fill"), hex_color)
+    tcPr.append(shd)
+
+
 def add_word_header(doc: Document, empresa: dict, titulo: str, codigo: str, version: int, fecha: str) -> None:
+    palette = colores_desde_logo(_logo_path(empresa))
     table = doc.add_table(rows=1, cols=3)
     table.alignment = WD_TABLE_ALIGNMENT.CENTER
     _table_borders(table)
@@ -106,6 +122,7 @@ def add_word_header(doc: Document, empresa: dict, titulo: str, codigo: str, vers
 
     logo_cell = table.cell(0, 0)
     logo_cell.vertical_alignment = WD_ALIGN_VERTICAL.CENTER
+    _shade_word_cell(logo_cell, palette["light"])
     p = logo_cell.paragraphs[0]
     p.alignment = WD_ALIGN_PARAGRAPH.CENTER
     logo = _logo_path(empresa)
@@ -114,21 +131,32 @@ def add_word_header(doc: Document, empresa: dict, titulo: str, codigo: str, vers
 
     title_cell = table.cell(0, 1)
     title_cell.vertical_alignment = WD_ALIGN_VERTICAL.CENTER
+    _shade_word_cell(title_cell, palette["primary"])
     pt = title_cell.paragraphs[0]
     pt.alignment = WD_ALIGN_PARAGRAPH.CENTER
     r = pt.add_run(titulo.upper())
     r.bold = True
     r.font.size = Pt(12)
-    _force_black(r)
+    try:
+        r.font.color.rgb = RGBColor.from_string(palette["on_primary"])
+    except Exception:
+        _force_black(r)
 
-    meta = table.cell(0, 2).paragraphs[0]
+    meta_cell = table.cell(0, 2)
+    meta_cell.vertical_alignment = WD_ALIGN_VERTICAL.CENTER
+    _shade_word_cell(meta_cell, palette["secondary"])
+    meta = meta_cell.paragraphs[0]
     mr = meta.add_run(
         f"{empresa.get('razon_social','')}\nNIT: {empresa.get('nit','')}\n"
-        f"C?digo: {codigo}\nVersi?n: {version}\nFecha: {fecha}"
+        f"Codigo: {codigo}\nVersion: {version}\nFecha: {fecha}"
     )
     mr.font.size = Pt(9)
-    _force_black(mr)
+    try:
+        mr.font.color.rgb = RGBColor.from_string(palette["on_primary"])
+    except Exception:
+        _force_black(mr)
     doc.add_paragraph()
+
 
 
 def add_word_signatures(doc: Document, empresa: dict, include_vigia: bool = True) -> None:
@@ -265,6 +293,11 @@ def generar_word_desde_plantilla(empresa: dict, doc_meta: dict, version: int, fe
 
 
 def _excel_header(ws, empresa: dict, titulo: str, codigo: str, version: int, fecha: str) -> int:
+    pal = colores_desde_logo(_logo_path(empresa))
+    fill_pri = PatternFill("solid", fgColor=pal["primary"])
+    fill_sec = PatternFill("solid", fgColor=pal["secondary"])
+    fill_light = PatternFill("solid", fgColor=pal["light"])
+    on_pri = pal.get("on_primary", "FFFFFF")
     ws.merge_cells("A1:B3")
     ws.merge_cells("C1:H3")
     ws.merge_cells("I1:L3")
@@ -278,18 +311,34 @@ def _excel_header(ws, empresa: dict, titulo: str, codigo: str, version: int, fec
         except Exception:
             pass
     c = ws.cell(1, 3, titulo.upper())
-    c.font = Font(bold=True, size=12, color="000000")
+    c.font = Font(bold=True, size=12, color=on_pri)
+    c.fill = fill_pri
     c.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
     meta = ws.cell(
         1, 9,
         f"{empresa.get('razon_social','')}\nNIT: {empresa.get('nit','')}\n"
         f"C?digo: {codigo}\nVersi?n: {version}\nFecha: {fecha}",
     )
-    meta.font = Font(size=9, color="000000")
+    meta.font = Font(size=9, color=on_pri)
+    meta.fill = fill_sec
     meta.alignment = Alignment(vertical="center", wrap_text=True)
     for r in range(1, 4):
         for col in range(1, 13):
-            ws.cell(r, col).border = BORDER
+            cell = ws.cell(r, col)
+            cell.border = BORDER
+            if col <= 2:
+                cell.fill = fill_light
+            elif 3 <= col <= 8:
+                cell.fill = fill_pri
+            elif col >= 9:
+                cell.fill = fill_sec
+    # Restaurar texto titulo/meta (merge usa celda origen)
+    c = ws.cell(1, 3)
+    c.font = Font(bold=True, size=12, color=on_pri)
+    c.fill = fill_pri
+    meta = ws.cell(1, 9)
+    meta.font = Font(size=9, color=on_pri)
+    meta.fill = fill_sec
     return 5
 
 
@@ -331,7 +380,8 @@ def generar_excel_desde_cero(empresa: dict, doc_meta: dict, version: int, fecha:
     for c, h in enumerate(cols, 1):
         cell = ws.cell(r, c, h)
         cell.font = Font(bold=True, color="000000")
-        cell.fill = HEADER_FILL
+        _pal = colores_desde_logo(_logo_path(empresa))
+        cell.fill = PatternFill("solid", fgColor=_pal["light"])
         cell.border = BORDER
         cell.alignment = Alignment(wrap_text=True, horizontal="center", vertical="center")
     header_row = r
