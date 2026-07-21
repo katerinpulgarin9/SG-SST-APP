@@ -26,7 +26,7 @@ from generador.plantillas_index import (
     estado_plantillas_catalogo,
     listar_plantillas,
 )
-from generador.relleno_plantilla import rellenar_excel, rellenar_word
+from generador.relleno_plantilla import rellenar_excel, rellenar_word, _scrub_ooxml_file, _contexto
 from generador.familias_documento import (
     COLUMNAS_EXCEL,
     contexto_actividad,
@@ -246,6 +246,11 @@ def generar_word_desde_plantilla(empresa: dict, doc_meta: dict, version: int, fe
         _agregar_secciones_word(doc, empresa, doc_meta)
         add_word_signatures(doc, empresa, include_vigia=_include_vigia(doc_meta))
         doc.save(str(out_path))
+    # Segunda pasada anti FOREST GREEN (XML partido / encabezados)
+    try:
+        _scrub_ooxml_file(out_path, _contexto(empresa, doc_meta, version, fecha))
+    except Exception:
+        pass
     return out_path
 
 

@@ -1,21 +1,24 @@
 # -*- coding: utf-8 -*-
-"""Rellena plantillas Word/Excel con datos de empresa sin perder su estructura.
+"""Rellena plantillas Word/Excel con datos de la empresa activa.
 
-Las plantillas del pack suelen traer datos de ejemplo (FOREST GREEN, NIT, etc.).
-Este modulo los reemplaza por la empresa activa configurada en la app.
+Las plantillas del pack traen datos de ejemplo (FOREST GREEN, NIT demo, etc.).
+Se reemplazan a nivel de parrafo y tambien en el XML interno del .docx/.xlsx
+(para atrapar texto partido en varios runs / cuadros de texto).
 """
 from __future__ import annotations
 
+import io
 import re
+import zipfile
 from pathlib import Path
 from typing import Any, Iterable
+from xml.sax.saxutils import escape as xml_escape
 
 from openpyxl import load_workbook
 from openpyxl.drawing.image import Image as XLImage
 
 from generador.familias_documento import contexto_actividad
 
-# Datos de ejemplo frecuentes en el pack GESTION DOCUMENTAL SST
 _EMPRESA_EJEMPLO_REGEX = [
     re.compile(r"FOREST\s+GREEN\s+SERVICIOS\s+AMBIENTALES\s+S\.?\s*A\.?\s*S\.?", re.I),
     re.compile(r"FOREST\s+GREEN\s+SERVICIOS\s+AMBIENTALES", re.I),
@@ -82,20 +85,17 @@ def _reemplazar_texto(texto: str, ctx: dict[str, str]) -> str:
     fecha = _ctx_val(ctx, "fecha", fallback="")
     ciiu = _ctx_val(ctx, "ciiu", fallback="")
 
-    # 1) Placeholders tipo Jinja / corchetes
     for k, v in ctx.items():
         val = (v or "").strip() or "________________"
         out = out.replace("{{" + k + "}}", val)
         out = out.replace("{{ " + k + " }}", val)
         out = out.replace("[" + k.upper() + "]", val)
 
-    # 2) Datos de ejemplo del pack (FOREST GREEN, NIT demo, etc.)
     for rx in _EMPRESA_EJEMPLO_REGEX:
         out = rx.sub(razon, out)
     for rx in _NIT_EJEMPLO_REGEX:
         out = rx.sub(nit, out)
 
-    # CIIU de ejemplo frecuente en el pack
     out = re.sub(
         r"\(CIIU\s*0230\s*y\s*0163\)",
         f"(CIIU {ciiu})" if ciiu else "(CIIU segun actividad de la empresa)",
@@ -105,7 +105,6 @@ def _reemplazar_texto(texto: str, ctx: dict[str, str]) -> str:
     out = re.sub(r"\bCIIU\s*0230\b", f"CIIU {ctx.get('ciiu_codigo') or '____'}", out, flags=re.I)
     out = re.sub(r"\bCIIU\s*0163\b", "", out, flags=re.I)
 
-    # 3) Etiquetas con espacios en blanco
     def _pref(pat: str, valor: str) -> None:
         nonlocal out
         out = re.sub(pat, lambda m: m.group(1) + valor, out)
@@ -120,12 +119,9 @@ def _reemplazar_texto(texto: str, ctx: dict[str, str]) -> str:
     simples = [
         (r"(?i)\[NOMBRE DE LA EMPRESA\]", razon),
         (r"(?i)\[RAZON SOCIAL\]", razon),
-        (r"(?i)\[RAZ\u00d3N SOCIAL\]", razon),
         (r"(?i)\[NIT\]", nit),
         (r"(?i)\[CODIGO\]", codigo),
-        (r"(?i)\[C\u00d3DIGO\]", codigo),
         (r"(?i)\[VERSION\]", version),
-        (r"(?i)\[VERSI\u00d3N\]", version),
         (r"(?i)\[FECHA\]", fecha),
         (r"(?i)\[ARL\]", arl or "________________"),
         (r"(?i)\[RESPONSABLE SST\]", resp or "________________"),
@@ -138,37 +134,40 @@ def _reemplazar_texto(texto: str, ctx: dict[str, str]) -> str:
     for pat, rep_txt in simples:
         out = re.sub(pat, lambda m, r=rep_txt: r, out)
 
-    # 4) NIT demo con etiqueta
     out = re.sub(
         r"(?i)(NIT\s*:?\s*)901[\.\s]?989[\.\s]?693\s*-?\s*7",
         lambda m: m.group(1) + nit,
         out,
     )
-
     return out
 
 
 def _logo_path(empresa: dict) -> Path | None:
-    """Solo logo adjunto por empresa; sin fallback al logo por defecto."""
     p = (empresa.get("logo_path") or "").strip()
     if not p:
         return None
     path = Path(p)
-    if not path.exists():
-        return None
-    if path.name == "logo.png":
+    if not path.exists() or path.name == "logo.png":
         return None
     return path
 
 
 def _set_paragraph_text(p, nuevo: str) -> None:
-    """Reemplaza el texto del parrafo conservando el estilo del primer run."""
     if p.runs:
         p.runs[0].text = nuevo
         for r in p.runs[1:]:
             r.text = ""
     else:
         p.add_run(nuevo)
+
+
+def _iter_table_paragraphs(table) -> Iterable:
+    for row in table.rows:
+        for cell in row.cells:
+            for p in cell.paragraphs:
+                yield p
+            for nested in cell.tables:
+                yield from _iter_table_paragraphs(nested)
 
 
 def _iter_all_paragraphs(doc) -> Iterable:
@@ -184,15 +183,6 @@ def _iter_all_paragraphs(doc) -> Iterable:
                 yield from _iter_table_paragraphs(table)
 
 
-def _iter_table_paragraphs(table) -> Iterable:
-    for row in table.rows:
-        for cell in row.cells:
-            for p in cell.paragraphs:
-                yield p
-            for nested in cell.tables:
-                yield from _iter_table_paragraphs(nested)
-
-
 def _aplicar_documento_word(doc, ctx: dict[str, str]) -> None:
     for p in _iter_all_paragraphs(doc):
         if not p.text:
@@ -200,6 +190,78 @@ def _aplicar_documento_word(doc, ctx: dict[str, str]) -> None:
         nuevo = _reemplazar_texto(p.text, ctx)
         if nuevo != p.text:
             _set_paragraph_text(p, nuevo)
+
+
+def _flex_phrase_pattern(phrase: str) -> str:
+    """Permite etiquetas XML entre palabras (texto partido en runs de Word)."""
+    gap = r"(?:\s|&nbsp;|&#160;|<[^>]+>)*"
+    parts = [re.escape(p) for p in phrase.split() if p]
+    return gap.join(parts)
+
+
+def _ooxml_scrub_patterns(ctx: dict[str, str]) -> list[tuple[re.Pattern[str], str]]:
+    razon = xml_escape(_ctx_val(ctx, "razon_social"))
+    nit = xml_escape(_ctx_val(ctx, "nit"))
+    phrases = [
+        "FOREST GREEN SERVICIOS AMBIENTALES S.A.S.",
+        "FOREST GREEN SERVICIOS AMBIENTALES S.A.S",
+        "FOREST GREEN SERVICIOS AMBIENTALES",
+        "FOREST GREEN",
+        "Laboratorios LT S.A.S.",
+        "Laboratorios LT S.A.S",
+        "XXXXXX XXXXXX",
+        "NOMBRE DE LA EMPRESA",
+    ]
+    pats: list[tuple[re.Pattern[str], str]] = []
+    for ph in phrases:
+        pats.append((re.compile(_flex_phrase_pattern(ph), re.I), razon))
+    # NIT demo con posibles tags entre digitos
+    nit_flex = (
+        r"901"
+        + r"(?:\s|<[^>]+>)*"
+        + r"[\.]?"
+        + r"(?:\s|<[^>]+>)*"
+        + r"989"
+        + r"(?:\s|<[^>]+>)*"
+        + r"[\.]?"
+        + r"(?:\s|<[^>]+>)*"
+        + r"693"
+        + r"(?:\s|<[^>]+>)*"
+        + r"-?"
+        + r"(?:\s|<[^>]+>)*"
+        + r"7"
+    )
+    pats.append((re.compile(nit_flex, re.I), nit))
+    return pats
+
+
+def _scrub_ooxml_file(path: Path, ctx: dict[str, str]) -> None:
+    """Reemplazo brutal en XML interno del paquete Office."""
+    if not path.exists():
+        return
+    pats = _ooxml_scrub_patterns(ctx)
+    buf = io.BytesIO()
+    changed = False
+    with zipfile.ZipFile(path, "r") as zin, zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zout:
+        for info in zin.infolist():
+            data = zin.read(info.filename)
+            name = info.filename.lower()
+            if name.endswith((".xml", ".rels")) and not name.endswith(".bin"):
+                try:
+                    text = data.decode("utf-8")
+                except UnicodeDecodeError:
+                    zout.writestr(info, data)
+                    continue
+                nuevo = text
+                for rx, rep in pats:
+                    nuevo2 = rx.sub(rep, nuevo)
+                    if nuevo2 != nuevo:
+                        changed = True
+                        nuevo = nuevo2
+                data = nuevo.encode("utf-8")
+            zout.writestr(info, data)
+    if changed:
+        path.write_bytes(buf.getvalue())
 
 
 def rellenar_word(
@@ -213,7 +275,6 @@ def rellenar_word(
     ctx = _contexto(empresa, doc_meta, version, fecha)
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Intentar docxtpl (si hay {{placeholders}}); si falla, copiar y reemplazar.
     rendered = False
     try:
         from docxtpl import DocxTemplate
@@ -244,6 +305,7 @@ def rellenar_word(
     doc = Document(str(out_path))
     _aplicar_documento_word(doc, ctx)
     doc.save(str(out_path))
+    _scrub_ooxml_file(out_path, ctx)
     return out_path
 
 
@@ -260,8 +322,6 @@ def rellenar_excel(
     for ws in wb.worksheets:
         for row in ws.iter_rows():
             for cell in row:
-                if cell.value is None:
-                    continue
                 if isinstance(cell.value, str):
                     nuevo = _reemplazar_texto(cell.value, ctx)
                     if nuevo != cell.value:
@@ -277,4 +337,5 @@ def rellenar_excel(
                 pass
     out_path.parent.mkdir(parents=True, exist_ok=True)
     wb.save(str(out_path))
+    _scrub_ooxml_file(out_path, ctx)
     return out_path

@@ -853,6 +853,16 @@ def pagina_catalogo():
         )
 
     st.markdown("#### Generar documentos")
+    _rz = (emp.get("razon_social") or "").strip()
+    _nit = (emp.get("nit") or "").strip()
+    if not _rz or not _nit:
+        st.error(
+            "La empresa activa no tiene razón social y/o NIT. "
+            "Ve a **Empresa**, guárdalos y vuelve a generar; "
+            "si no, la plantilla puede quedar con datos incompletos."
+        )
+    else:
+        st.caption(f"Se usarán los datos de: **{_rz}** | NIT {_nit}")
     st.caption("Con la selección de la tabla, elige plantilla(s) y genera o descarga.")
 
     from generador.plantillas_index import (
