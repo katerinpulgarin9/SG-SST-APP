@@ -595,6 +595,148 @@ def _aplicar_colores_excel(wb, empresa: dict) -> None:
                     )
 
 
+_LOGO_PLACEHOLDER_RE = re.compile(
+    r"^\s*(?:\{\{\s*)?logo(?:\s*\}\})?\s*$",
+    re.I,
+)
+
+
+def _es_placeholder_logo(valor: Any) -> bool:
+    return isinstance(valor, str) and bool(_LOGO_PLACEHOLDER_RE.match(valor.strip()))
+
+
+def _rellenar_bloque_meta_excel(texto: str, ctx: dict[str, str]) -> str:
+    """Completa bloques tipo CODIGO/VERSION/FECHA e inserta empresa/NIT si faltan."""
+    if not texto or not isinstance(texto, str):
+        return texto
+    out = texto
+    razon = (ctx.get("razon_social") or "").strip()
+    nit = (ctx.get("nit") or "").strip()
+    codigo = (ctx.get("codigo") or "").strip()
+    version = (ctx.get("version") or "").strip()
+    fecha = (ctx.get("fecha") or "").strip()
+
+    def _fill_line(pat: str, valor: str) -> None:
+        nonlocal out
+        if not valor:
+            return
+        out = re.sub(
+            pat,
+            lambda m: m.group(1) + valor,
+            out,
+            count=1,
+            flags=re.I | re.M,
+        )
+
+    _fill_line(r"(c[o\u00f3]digo\s*:\s*)\s*$", codigo)
+    _fill_line(r"(c[o\u00f3]digo\s*:\s*)(?=\n|$)", codigo)
+    _fill_line(r"(versi[o\u00f3]n\s*:\s*)\s*(?:0?1)?\s*(?=\n|$)", version)
+    _fill_line(r"(fecha\s*:\s*)\s*(?=\n|$)", fecha)
+    _fill_line(r"(fecha\s+de\s+actualizaci[o\u00f3]n\s*:\s*)\s*$", fecha)
+
+    looks_meta = bool(
+        re.search(r"(?i)c[o\u00f3]digo\s*:", out)
+        and re.search(r"(?i)versi[o\u00f3]n\s*:", out)
+    )
+    if looks_meta and razon and not re.search(r"(?i)\bempresa\s*:", out):
+        encabezado = f"EMPRESA: {razon}"
+        if nit:
+            encabezado += f"\nNIT: {nit}"
+        out = encabezado + "\n" + out.lstrip()
+    return out
+
+
+def _inyectar_logo_y_empresa_excel(wb, empresa: dict, ctx: dict[str, str]) -> None:
+    """Plantillas nuevas a veces traen texto 'logo' sin imagen embebida ni datos de empresa."""
+    logo = _logo_path(empresa)
+    razon = (ctx.get("razon_social") or "").strip()
+    nit = (ctx.get("nit") or "").strip()
+    resp = (ctx.get("resp_sst_nombre") or "").strip()
+    fecha = (ctx.get("fecha") or "").strip()
+
+    for ws in wb.worksheets:
+        anclas_logo: list[str] = []
+        max_col = min(ws.max_column or 1, 80)
+        max_row_scan = min(ws.max_row or 1, 12)
+
+        for row in ws.iter_rows(min_row=1, max_row=max_row_scan, max_col=max_col):
+            for cell in row:
+                if not isinstance(cell.value, str):
+                    continue
+                raw = cell.value
+                if _es_placeholder_logo(raw):
+                    anclas_logo.append(cell.coordinate)
+                    # Dejar celda limpia; la imagen va anclada ahi
+                    cell.value = None if logo else (
+                        f"{razon}\nNIT: {nit}" if razon else None
+                    )
+                    continue
+
+                nuevo = _rellenar_bloque_meta_excel(raw, ctx)
+                # Elaborado por generico de plantilla
+                if resp and re.search(
+                    r"(?i)^elaborado\s+por\s*:\s*(encargado\s+del\s+sg-?sst.?|responsable\s+sst)?\s*$",
+                    nuevo.strip(),
+                ):
+                    nuevo = f"Elaborado por: {resp}"
+                elif resp and re.search(r"(?i)^elaborado\s+por\s*:\s*$", nuevo.strip()):
+                    nuevo = f"Elaborado por: {resp}"
+
+                if fecha and re.search(
+                    r"(?i)^fecha\s+de\s+actualizaci[o\u00f3]n\s*:\s*$",
+                    nuevo.strip(),
+                ):
+                    nuevo = f"Fecha de actualizaci\u00f3n: {fecha}"
+
+                if nuevo != raw:
+                    cell.value = nuevo
+
+        # Si no habia placeholder pero tampoco imagen, poner datos en A1 si esta vacia
+        if not anclas_logo and not getattr(ws, "_images", None):
+            a1 = ws.cell(1, 1)
+            if a1.value is None and razon:
+                a1.value = f"{razon}\nNIT: {nit}" if nit else razon
+                anclas_logo.append("A1")
+
+        if logo and anclas_logo:
+            try:
+                img = XLImage(str(logo))
+                img.width = 96
+                img.height = 58
+                ws.add_image(img, anclas_logo[0])
+            except Exception:
+                # Si falla la imagen, al menos deja texto de empresa
+                cell = ws[anclas_logo[0]]
+                if cell.value is None and razon:
+                    cell.value = f"{razon}\nNIT: {nit}" if nit else razon
+
+        # Garantizar empresa visible en encabezado si sigue ausente
+        header_txt = " ".join(
+            str(ws.cell(r, c).value or "")
+            for r in range(1, min(4, max_row_scan + 1))
+            for c in range(1, min(max_col, 70) + 1)
+        )
+        if razon and razon.lower() not in header_txt.lower():
+            # Preferir celda meta (CODIGO/VERSION); si no, A1
+            colocado = False
+            for row in ws.iter_rows(min_row=1, max_row=3, max_col=max_col):
+                for cell in row:
+                    val = cell.value
+                    if isinstance(val, str) and re.search(r"(?i)c[o\u00f3]digo\s*:", val):
+                        pref = f"EMPRESA: {razon}"
+                        if nit:
+                            pref += f"\nNIT: {nit}"
+                        cell.value = pref + "\n" + val.lstrip()
+                        colocado = True
+                        break
+                if colocado:
+                    break
+            if not colocado:
+                a1 = ws.cell(1, 1)
+                if a1.value is None:
+                    a1.value = f"{razon}\nNIT: {nit}" if nit else razon
+
+
 def rellenar_excel(
     plantilla: Path,
     empresa: dict,
@@ -612,6 +754,10 @@ def rellenar_excel(
                     nuevo = _reemplazar_texto(cell.value, ctx)
                     if nuevo != cell.value:
                         cell.value = nuevo
+    try:
+        _inyectar_logo_y_empresa_excel(wb, empresa, ctx)
+    except Exception:
+        pass
     try:
         _aplicar_colores_excel(wb, empresa)
     except Exception:
