@@ -78,8 +78,17 @@ def _table_borders(table) -> None:
 
 
 def _logo_path(empresa: dict) -> Optional[Path]:
-    p = Path(empresa.get("logo_path") or db.LOGO_PATH)
-    return p if p.exists() else None
+    """Solo logo adjunto por empresa; sin fallback al logo por defecto."""
+    raw = (empresa.get("logo_path") or "").strip()
+    if not raw:
+        return None
+    p = Path(raw)
+    if not p.exists():
+        return None
+    # Evitar reutilizar logo.png global de otra empresa
+    if p.name == "logo.png":
+        return None
+    return p
 
 
 def add_word_header(doc: Document, empresa: dict, titulo: str, codigo: str, version: int, fecha: str) -> None:
@@ -303,6 +312,8 @@ def generar_documento(
     version: Optional[int] = None,
     auto_bump: bool = False,
     numero_asignado: Optional[int] = None,
+    plantilla_path: Optional[Path | str] = None,
+    forzar_sin_plantilla: bool = False,
 ) -> dict[str, Any]:
     """Genera un documento en memoria (temp) y devuelve bytes para descarga.
 
@@ -338,7 +349,14 @@ def generar_documento(
     doc_gen = dict(doc_meta)
     doc_gen["codigo"] = codigo_final
 
-    plantilla = encontrar_plantilla(doc_meta)
+    if forzar_sin_plantilla:
+        plantilla = None
+    elif plantilla_path:
+        plantilla = Path(plantilla_path)
+        if not plantilla.exists():
+            raise ValueError(f"Plantilla no encontrada: {plantilla}")
+    else:
+        plantilla = encontrar_plantilla(doc_meta)
     nombre_base = f"{codigo_final}_{_slug(doc_meta['nombre'])}"
     es_word = doc_meta["formato"] == "Word"
     nombre_archivo = f"{nombre_base}.docx" if es_word else f"{nombre_base}.xlsx"

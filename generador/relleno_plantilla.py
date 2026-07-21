@@ -78,15 +78,16 @@ def _reemplazar_texto(texto: str, ctx: dict[str, str]) -> str:
 
 
 def _logo_path(empresa: dict) -> Path | None:
-    p = empresa.get("logo_path") or ""
-    path = Path(p) if p else None
-    if path and path.exists():
-        return path
-    from generador import db
-
-    if db.LOGO_PATH.exists():
-        return db.LOGO_PATH
-    return None
+    """Solo logo adjunto por empresa; sin fallback al logo por defecto."""
+    p = (empresa.get("logo_path") or "").strip()
+    if not p:
+        return None
+    path = Path(p)
+    if not path.exists():
+        return None
+    if path.name == "logo.png":
+        return None
+    return path
 
 
 def _aplicar_parrafos(doc, ctx: dict[str, str]) -> None:

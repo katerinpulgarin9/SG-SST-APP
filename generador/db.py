@@ -371,7 +371,7 @@ def crear_empresa_nueva(data: Optional[dict[str, Any]] = None) -> int:
                 data.get("resp_sst_cargo", "Responsable SST"),
                 data.get("resp_sst_licencia", ""),
                 data.get("vigia_nombre", ""),
-                data.get("logo_path", str(LOGO_PATH)),
+                data.get("logo_path", ""),
             ),
         )
         eid = int(cur.lastrowid)
@@ -477,7 +477,7 @@ def save_empresa(data: dict[str, Any]) -> None:
                     data.get("resp_sst_cargo", "Responsable SST"),
                     data.get("resp_sst_licencia", ""),
                     data.get("vigia_nombre", ""),
-                    data.get("logo_path", str(LOGO_PATH)),
+                    data.get("logo_path", ""),
                     eid,
                 ),
             )

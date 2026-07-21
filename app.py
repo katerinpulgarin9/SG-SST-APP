@@ -6,6 +6,7 @@ import sys
 import io
 import zipfile
 from datetime import date, datetime
+import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
@@ -29,75 +30,310 @@ st.set_page_config(
 
 def _ensure():
     db.init_db()
-    if not db.LOGO_PATH.exists():
-        candidatos = [
-            ROOT.parent / "SUGANUS-TRABAJOS" / "LOGO" / "LOGO SUGANUS .png",
-            ROOT.parent / "SUGANUS-TRABAJOS" / "LOGO" / "LOGO SUGANUS.png",
-        ]
-        for c in candidatos:
-            if c.exists():
-                db.LOGO_PATH.parent.mkdir(parents=True, exist_ok=True)
-                db.LOGO_PATH.write_bytes(c.read_bytes())
-                emp = db.get_empresa()
-                emp["logo_path"] = str(db.LOGO_PATH)
-                db.save_empresa(emp)
-                break
 
 
 _ensure()
 
 
-def _barra_lateral() -> None:
-    """Estado rapido y guia para quien prueba la app por primera vez."""
+
+
+
+def _aplicar_estilo() -> None:
+    """Tema visual claro tipo mockup SG-SST."""
+    st.markdown(
+        """
+<style>
+:root {
+  --sst-azul: #4F74B8;
+  --sst-azul-claro: #EAF0F9;
+  --sst-azul-suave: #F5F8FC;
+  --sst-amarillo-claro: #FFF8E7;
+  --sst-rojo-claro: #FCEEEE;
+  --sst-verde: #6FAE7B;
+  --sst-verde-claro: #EAF6ED;
+  --sst-texto: #2C3E50;
+  --sst-muted: #6B7C8F;
+  --sst-borde: #D5E0EF;
+}
+
+.stApp { background: #F7FAFD !important; }
+
+section[data-testid="stSidebar"] {
+  background: #F3F7FC !important;
+  border-right: 1px solid var(--sst-borde);
+}
+section[data-testid="stSidebar"] > div:first-child { padding-top: 1rem; }
+
+h1, h2, h3 { color: var(--sst-azul) !important; font-weight: 650 !important; }
+.sst-page-desc { color: var(--sst-muted); font-size: 0.95rem; margin-bottom: 1rem; }
+.sst-brand { text-align: center; margin-bottom: 0.6rem; }
+.sst-brand-title {
+  color: var(--sst-azul) !important;
+  font-size: 2.75rem !important;
+  line-height: 1.05 !important;
+  font-weight: 800 !important;
+  margin: 0.1rem 0 0.35rem 0 !important;
+  letter-spacing: 0.03em !important;
+}
+section[data-testid="stSidebar"] .sst-brand-title,
+section[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] p.sst-brand-title,
+section[data-testid="stSidebar"] h1.sst-brand-title {
+  font-size: 2.75rem !important;
+  font-weight: 800 !important;
+  color: #4F74B8 !important;
+}
+.sst-brand-sub { color: var(--sst-muted); font-size: 0.78rem; line-height: 1.3; margin: 0.2rem 0 0.8rem 0; }
+
+/* Botones de navegacion (tarjetas) */
+section[data-testid="stSidebar"] div.stButton > button {
+  width: 100%;
+  text-align: left !important;
+  justify-content: flex-start !important;
+  background: #fff !important;
+  border: 1px solid var(--sst-borde) !important;
+  border-radius: 14px !important;
+  padding: 0.85rem 1rem !important;
+  margin-bottom: 0.45rem !important;
+  color: var(--sst-texto) !important;
+  font-weight: 600 !important;
+  box-shadow: none !important;
+  white-space: pre-line !important;
+  min-height: 64px;
+}
+section[data-testid="stSidebar"] div.stButton > button:hover {
+  border-color: var(--sst-azul) !important;
+  background: #fff !important;
+}
+section[data-testid="stSidebar"] div.stButton > button[kind="primary"] {
+  background: #fff !important;
+  color: var(--sst-azul) !important;
+  border: 2px solid var(--sst-azul) !important;
+  box-shadow: 0 0 0 3px rgba(79,116,184,0.12) !important;
+}
+section[data-testid="stSidebar"] div[data-testid="stMarkdownContainer"] p {
+  margin-bottom: 0.2rem;
+}
+
+div.stButton > button[kind="primary"],
+button[data-testid="baseButton-primary"] {
+  background: var(--sst-verde) !important;
+  border: none !important;
+  color: #fff !important;
+  border-radius: 10px !important;
+  font-weight: 600 !important;
+}
+div.stButton > button {
+  border-radius: 10px !important;
+}
+
+div[data-baseweb="input"] > div,
+div[data-baseweb="select"] > div,
+div[data-baseweb="textarea"] > div {
+  border-radius: 10px !important;
+  border-color: var(--sst-borde) !important;
+  background: #fff !important;
+}
+
+div[data-testid="stAlert"] { border-radius: 12px !important; }
+div[data-testid="stExpander"] {
+  background: var(--sst-amarillo-claro);
+  border: 1px solid #F0E4B8;
+  border-radius: 12px;
+}
+div[data-testid="stDataFrame"],
+div[data-testid="stDataEditor"] {
+  border: 1px solid var(--sst-borde);
+  border-radius: 12px;
+  overflow: visible;
+  background: #fff;
+  min-height: 280px;
+}
+hr { border-color: var(--sst-borde) !important; }
+
+div.stDownloadButton > button {
+  background: var(--sst-verde-claro) !important;
+  color: #2F5D3A !important;
+  border: 1px solid #C5E0CC !important;
+  border-radius: 10px !important;
+  font-weight: 600 !important;
+}
+
+section[data-testid="stFileUploader"] {
+  background: transparent !important;
+  border: none !important;
+  padding: 0 !important;
+}
+
+.sst-card {
+  background: #fff;
+  border: 1px solid var(--sst-borde);
+  border-radius: 16px;
+  padding: 1rem 1.1rem;
+  margin-bottom: 1rem;
+}
+.sst-logo-box {
+  background: var(--sst-amarillo-claro);
+  border: 1px solid #F0E4B8;
+  border-radius: 16px;
+  padding: 1rem 1.1rem;
+  margin-top: 0.5rem;
+}
+.sst-logo-empty {
+  border: 1.5px dashed #D2C48A;
+  border-radius: 12px;
+  background: #FFFcf3;
+  min-height: 140px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  color: var(--sst-muted);
+  padding: 1rem;
+  font-size: 0.9rem;
+}
+.sst-tip {
+  background: #FFF3C4;
+  border-radius: 10px;
+  padding: 0.7rem 0.8rem;
+  color: #6A5A20;
+  font-size: 0.85rem;
+}
+.sst-reminder {
+  background: var(--sst-rojo-claro);
+  border: 1px solid #F0C9C9;
+  border-radius: 12px;
+  padding: 0.7rem 0.85rem;
+  color: #7A3B3B;
+  font-size: 0.85rem;
+  margin-top: 0.8rem;
+}
+.sst-footer {
+  color: var(--sst-muted);
+  font-size: 0.75rem;
+  text-align: center;
+  margin-top: 1rem;
+}
+</style>
+""",
+        unsafe_allow_html=True,
+    )
+
+
+
+def _es_empresa_prueba(emp: dict) -> bool:
+    """Oculta empresas claramente de prueba en el selector."""
+    razon = (emp.get("razon_social") or "").strip().upper()
+    nit = re.sub(r"[^0-9]", "", (emp.get("nit") or "").strip())
+    if not razon and not nit:
+        return False
+    if any(x in razon for x in ("PRUEBA", "TEST", "OTRA SAS", "DEMO")):
+        return True
+    if razon in {"OTRA", "OTRA S.A.S", "OTRA S.A.S."}:
+        return True
+    if nit in {"123", "1", "000", "000000000", "123456789"}:
+        return True
+    return False
+
+
+def _empresas_visibles() -> list[dict]:
+    return [e for e in db.list_empresas() if not _es_empresa_prueba(e)]
+
+
+
+def _barra_lateral() -> str:
+    """Menu lateral tipo tarjetas (mockup)."""
     emp = db.get_empresa()
+    if _es_empresa_prueba(emp):
+        visibles = _empresas_visibles()
+        if visibles:
+            db.set_empresa_activa(int(visibles[0]["id"]))
+            emp = db.get_empresa()
+            st.session_state["num_desde_pending"] = db.get_siguiente_sugerido()
+            st.session_state["descargas_listas"] = []
+
+    nav_items = [
+        ("Empresa", "Configuraci\u00f3n de la empresa"),
+        ("Plantillas", "Gestiona tus plantillas"),
+        ("Cat\u00e1logo / Generar", "Documentos del SG-SST"),
+        ("Historial", "Documentos generados"),
+    ]
+    if "nav_pagina" not in st.session_state:
+        st.session_state["nav_pagina"] = "Empresa"
+
     with st.sidebar:
-        st.markdown("### SG-SST")
-        st.caption("Gestión documental")
         st.markdown(
-            f"**Empresa**\n\n"
-            f"{emp.get('razon_social') or '(sin nombre)'}\n\n"
-            f"NIT: {emp.get('nit') or '-'}"
+            '<div class="sst-brand">'
+            '<h1 class="sst-brand-title" style="font-size:2.75rem!important;font-weight:800!important;color:#4F74B8!important;line-height:1.05!important;margin:0.1rem 0 0.35rem 0!important;letter-spacing:0.03em!important;">SG-SST</h1>'
+            '<p class="sst-brand-sub">Sistema de Gesti\u00f3n de Seguridad y Salud en el Trabajo</p>'
+            "</div>",
+            unsafe_allow_html=True,
         )
-        st.divider()
-        n_docs = len(db.list_catalogo())
-        st.metric("Documentos en catálogo", n_docs)
-        st.metric("Siguiente NNN", f"{db.get_siguiente_sugerido():03d}")
-        modo = db.get_modo_plantillas()
-        st.caption(
-            "Plantillas: "
-            + ("pack base + adjuntadas" if modo == "todas" else "solo adjuntadas")
+
+        for nombre, sub in nav_items:
+            activo = st.session_state["nav_pagina"] == nombre
+            etiqueta = f"{'●  ' if activo else ''}{nombre}\n{sub}"
+            if st.button(
+                etiqueta,
+                key=f"navbtn_{nombre}",
+                use_container_width=True,
+                type="primary" if activo else "secondary",
+            ):
+                st.session_state["nav_pagina"] = nombre
+                st.rerun()
+
+        st.markdown(
+            '<div class="sst-reminder">Recuerda mantener la informaci\u00f3n de tu empresa actualizada.</div>',
+            unsafe_allow_html=True,
         )
-        pack = carpeta_base_gestion_documental()
-        if pack:
-            st.success("Pack de plantillas disponible")
-        else:
-            st.warning("Sin pack base: se generará desde cero")
-        st.divider()
-        with st.expander("Guía rápida", expanded=False):
+
+        with st.expander("Gu\u00eda r\u00e1pida", expanded=False):
             st.markdown(
-                "1. **Empresa**: logo, NIT y responsables.\n"
-                "2. **Plantillas**: deja *Pack base + adjuntadas*.\n"
-                "3. **Catálogo / Generar**: marca **Sel**, genera y **descarga**.\n"
-                "4. **Historial**: revisa lo generado por esta empresa.\n\n"
-                "Tip: cada empresa tiene su propia numeración."
+                """1. **Empresa**: logo, NIT y responsables.
+2. **Plantillas**: deja *Pack base + adjuntadas*.
+3. **Cat\u00e1logo / Generar**: marca **Sel**, genera y **descarga**.
+4. **Historial**: revisa lo generado por esta empresa."""
             )
-        if not (emp.get("razon_social") or "").strip():
-            st.info("Completa la razón social en la pestaña Empresa.")
+
+        nombre = emp.get("razon_social") or "Sin nombre"
+        nit = emp.get("nit") or "-"
+        st.caption(f"Empresa en uso: **{nombre}** · NIT {nit}")
+        st.markdown('<p class="sst-footer">SG-SST Versi\u00f3n 1.0.0</p>', unsafe_allow_html=True)
+
+    return st.session_state["nav_pagina"]
+
+
 
 
 def pagina_empresa():
-    st.header("1. Configuración de la empresa")
-    st.caption(
-        "Cada empresa tiene su propio historial y numeración. "
-        "Al cambiar de empresa, el historial y el consecutivo cambian con ella."
-    )
+    emp = db.get_empresa()
+    eid = db.get_empresa_activa_id()
 
-    empresas = db.list_empresas()
+    head_l, head_r = st.columns([3, 2])
+    with head_l:
+        st.header("Configuraci\u00f3n de la empresa")
+        st.markdown(
+            '<p class="sst-page-desc">Completa la informaci\u00f3n de tu empresa. '
+            "Estos datos se usar\u00e1n para generar los documentos del SG-SST.</p>",
+            unsafe_allow_html=True,
+        )
+    with head_r:
+        st.write("")
+        guardar = st.button(
+            "Guardar cambios",
+            type="primary",
+            use_container_width=True,
+            key="btn_guardar_empresa_top",
+        )
+
+    empresas = _empresas_visibles()
     activa_id = db.get_empresa_activa_id()
-    labels = {
-        f"{e['id']}: {e.get('razon_social') or '(sin nombre)'} | NIT {e.get('nit') or '-'}": e["id"]
-        for e in empresas
-    }
+    labels = {}
+    for e in empresas:
+        rs = (e.get("razon_social") or "").strip()
+        nit_e = (e.get("nit") or "").strip() or "-"
+        titulo = rs if rs else "Empresa nueva (completa los datos)"
+        labels[f"{titulo} | NIT {nit_e}"] = e["id"]
+
     c_sel, c_new = st.columns([3, 1])
     with c_sel:
         if labels:
@@ -117,54 +353,43 @@ def pagina_empresa():
                 st.rerun()
     with c_new:
         st.write("")
-        if st.button("Nueva empresa"):
+        if st.button("Nueva empresa", use_container_width=True):
             db.crear_empresa_nueva()
             st.session_state["num_desde_pending"] = 1
             st.session_state["descargas_listas"] = []
-            st.success("Empresa nueva creada (historial y numeración en cero).")
+            st.success("Empresa nueva creada.")
             st.rerun()
 
     emp = db.get_empresa()
+    eid = db.get_empresa_activa_id()
 
-    col1, col2 = st.columns([1, 2])
-    with col1:
-        st.subheader("Logo")
-        logo = emp.get("logo_path") or str(db.LOGO_PATH)
-        if Path(logo).exists():
-            st.image(logo, width=180)
-        elif db.LOGO_PATH.exists():
-            st.image(str(db.LOGO_PATH), width=180)
-        up = st.file_uploader("Subir logo (png/jpg)", type=["png", "jpg", "jpeg"])
-        if up is not None:
-            img = Image.open(up)
-            db.LOGO_PATH.parent.mkdir(parents=True, exist_ok=True)
-            # logo por empresa
-            dest = db.DATA_DIR / f"logo_emp_{db.get_empresa_activa_id()}.png"
-            img.save(dest)
-            emp_data = dict(emp)
-            emp_data["logo_path"] = str(dest)
-            emp_data["clases_riesgo_list"] = emp.get("clases_riesgo_list") or []
-            db.save_empresa(emp_data)
-            st.success("Logo guardado para esta empresa.")
-            st.rerun()
-
-    with col2:
-        razon = st.text_input("Razón social", emp.get("razon_social", ""))
-        nit = st.text_input("NIT", emp.get("nit", ""))
-        c1, c2 = st.columns(2)
-        with c1:
-            ciiu_cod = st.text_input("CIIU (código)", emp.get("ciiu_codigo", ""))
-        with c2:
-            ciiu_desc = st.text_input("CIIU (descripción)", emp.get("ciiu_descripcion", ""))
-        arl = st.text_input("ARL", emp.get("arl", ""))
+    st.markdown("#### Informaci\u00f3n general")
+    st.markdown('<div class="sst-card">', unsafe_allow_html=True)
+    r1a, r1b = st.columns(2)
+    with r1a:
+        razon = st.text_input("Raz\u00f3n social *", emp.get("razon_social", ""), placeholder="Ej. Empresa Ejemplo S.A.S.")
+    with r1b:
+        nit = st.text_input("NIT *", emp.get("nit", ""), placeholder="Ej. 900.000.000-1")
+    r2a, r2b = st.columns(2)
+    with r2a:
+        ciiu_cod = st.text_input("CIIU (c\u00f3digo)", emp.get("ciiu_codigo", ""), placeholder="Ej. 4610")
+    with r2b:
+        ciiu_desc = st.text_input("Actividad econ\u00f3mica (CIIU)", emp.get("ciiu_descripcion", ""), placeholder="Descripci\u00f3n CIIU")
+    r3a, r3b = st.columns(2)
+    with r3a:
+        arl = st.text_input("ARL", emp.get("arl", ""), placeholder="Ej. Positiva")
+    with r3b:
         clases_default = ", ".join(emp.get("clases_riesgo_list") or [])
         clases = st.text_input(
-            "Clase(s) de riesgo (separadas por coma)",
+            "Clase(s) de riesgo",
             clases_default,
-            help="Ej: I - administrativos, III - operarios",
+            placeholder="Ej: I - administrativos, III - operarios",
+            help="Separadas por coma",
         )
+    st.markdown("</div>", unsafe_allow_html=True)
 
-    st.subheader("Responsables")
+    st.markdown("#### Responsables")
+    st.markdown('<div class="sst-card">', unsafe_allow_html=True)
     a, b = st.columns(2)
     with a:
         rep_n = st.text_input("Representante legal - nombre", emp.get("rep_legal_nombre", ""))
@@ -174,12 +399,75 @@ def pagina_empresa():
         sst_c = st.text_input("Responsable SST - cargo", emp.get("resp_sst_cargo", "Responsable SST"))
         sst_l = st.text_input("Licencia SST (opcional)", emp.get("resp_sst_licencia", ""))
     vigia = st.text_input(
-        "Vigía / COPASST - nombre (opcional)",
+        "Vig\u00eda / COPASST - nombre (opcional)",
         emp.get("vigia_nombre", ""),
-        help="Si queda vacío, en firmas se deja línea en blanco.",
+        help="Si queda vac\u00edo, en firmas se deja l\u00ednea en blanco.",
     )
+    st.markdown("</div>", unsafe_allow_html=True)
 
-    if st.button("Guardar configuración", type="primary"):
+    st.markdown("#### Logo de la empresa")
+    st.markdown('<div class="sst-logo-box">', unsafe_allow_html=True)
+    logo_path = (emp.get("logo_path") or "").strip()
+    logo_file = Path(logo_path) if logo_path else None
+    tiene_logo = bool(
+        logo_file and logo_file.exists() and logo_file.name.startswith("logo_emp_")
+    )
+    if "logo_up_nonce" not in st.session_state:
+        st.session_state["logo_up_nonce"] = 0
+
+    c_prev, c_acc, c_tip = st.columns([1.2, 1.2, 1.3])
+    with c_prev:
+        if tiene_logo:
+            st.image(str(logo_file), width=160)
+        else:
+            st.markdown(
+                '<div class="sst-logo-empty">Sin logo.<br/>Sube el logo de tu empresa<br/>en formato PNG o JPG.</div>',
+                unsafe_allow_html=True,
+            )
+    with c_acc:
+        st.caption("Recomendado: PNG/JPG · m\u00e1x. 2 MB")
+        up = st.file_uploader(
+            "Subir logo",
+            type=["png", "jpg", "jpeg"],
+            key=f"logo_uploader_{eid}_{st.session_state['logo_up_nonce']}",
+            label_visibility="collapsed",
+        )
+        if tiene_logo:
+            if st.button("Quitar logo", key=f"btn_quitar_logo_{eid}", use_container_width=True):
+                try:
+                    if logo_file.exists():
+                        logo_file.unlink()
+                except OSError:
+                    pass
+                emp_data = dict(emp)
+                emp_data["logo_path"] = ""
+                emp_data["clases_riesgo_list"] = emp.get("clases_riesgo_list") or []
+                db.save_empresa(emp_data)
+                st.session_state["logo_up_nonce"] = int(st.session_state["logo_up_nonce"]) + 1
+                st.success("Logo eliminado.")
+                st.rerun()
+        if up is not None:
+            img = Image.open(up)
+            db.LOGO_PATH.parent.mkdir(parents=True, exist_ok=True)
+            dest = db.DATA_DIR / f"logo_emp_{eid}.png"
+            img.save(dest)
+            emp_data = dict(emp)
+            emp_data["logo_path"] = str(dest)
+            emp_data["clases_riesgo_list"] = emp.get("clases_riesgo_list") or []
+            db.save_empresa(emp_data)
+            st.session_state["logo_up_nonce"] = int(st.session_state["logo_up_nonce"]) + 1
+            st.success("Logo guardado.")
+            st.rerun()
+    with c_tip:
+        st.markdown(
+            '<div class="sst-tip">Este logo se usar\u00e1 en los documentos generados. '
+            "Puedes actualizarlo o quitarlo cuando lo necesites.</div>",
+            unsafe_allow_html=True,
+        )
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    guardar_abajo = st.button("Guardar configuraci\u00f3n", type="primary", key="btn_guardar_empresa_bottom")
+    if guardar or guardar_abajo:
         db.save_empresa(
             {
                 "razon_social": razon,
@@ -194,10 +482,11 @@ def pagina_empresa():
                 "resp_sst_cargo": sst_c,
                 "resp_sst_licencia": sst_l,
                 "vigia_nombre": vigia,
-                "logo_path": emp.get("logo_path") or str(db.LOGO_PATH),
+                "logo_path": (emp.get("logo_path") or "").strip(),
             }
         )
-        st.success("Datos de la empresa activa guardados.")
+        st.success("Datos de la empresa guardados.")
+
 
 
 def pagina_plantillas():
@@ -327,7 +616,11 @@ def pagina_plantillas():
 
 
 def pagina_catalogo():
-    st.header("3. Catálogo y generación")
+    st.header("Catálogo y generación")
+    if st.session_state.get("descargas_listas"):
+        if st.session_state.get("flash_gen"):
+            st.success(st.session_state.pop("flash_gen"))
+        st.info("Hay documentos listos para descargar. Usa los botones de la sección Descargas más abajo o genera más.")
     emp = db.get_empresa()
     st.caption(
         f"{emp.get('razon_social','')} | CIIU {emp.get('ciiu_codigo','')} - {emp.get('ciiu_descripcion','')}"
@@ -465,6 +758,9 @@ def pagina_catalogo():
         _reset_editor()
         st.rerun()
 
+    st.markdown("#### Lista del catálogo")
+    st.caption("Desplázate en la tabla. Marca **Sel** para elegir documentos.")
+
     # Mapa codigo -> tiene plantilla (SI/NO), cache por sesion
     if "_estado_pl_map" not in st.session_state:
         try:
@@ -536,6 +832,186 @@ def pagina_catalogo():
             "(en el orden de la tabla / selección)."
         )
 
+    st.markdown("#### Generar documentos")
+    st.caption("Con la selección de la tabla, elige plantilla(s) y genera o descarga.")
+
+    from generador.plantillas_index import (
+        encontrar_plantilla,
+        es_plantilla_usuario,
+        listar_plantillas_usuario,
+        registrar_plantilla_usuario,
+    )
+
+    modo_pl_gen = st.radio(
+        "Plantilla al generar",
+        [
+            "Automática (coincidencia / asociaciones)",
+            "Elegir plantilla(s) adjuntadas o del listado",
+            "Desde cero (sin plantilla)",
+        ],
+        horizontal=True,
+        key="modo_pl_gen",
+        help=(
+            "Automática: usa el match de la pestaña Plantillas. "
+            "Elegir: escoges una o varias plantillas y las asignas a los documentos. "
+            "Desde cero: ignora plantillas."
+        ),
+    )
+
+    plantilla_overrides: dict[str, str] = {}
+    forzar_sin = modo_pl_gen.startswith("Desde cero")
+
+    if modo_pl_gen.startswith("Elegir"):
+        st.caption(
+            "Puedes adjuntar plantillas ahora y/o marcar varias del listado. "
+            "Luego asigna una plantilla a cada documento seleccionado."
+        )
+        up_gen = st.file_uploader(
+            "Adjuntar plantilla(s) para esta generación",
+            type=["docx", "doc", "xlsx", "xls"],
+            accept_multiple_files=True,
+            key="up_pl_gen",
+        )
+        if up_gen and st.button("Guardar plantilla(s) adjuntadas", key="btn_save_pl_gen"):
+            guardadas = []
+            errores = []
+            codigo_asoc = codigos_sel[0] if len(codigos_sel) == 1 else ""
+            for f in up_gen:
+                try:
+                    path = registrar_plantilla_usuario(f.name, f.getvalue(), codigo_asoc)
+                    guardadas.append(path.name)
+                except Exception as e:
+                    errores.append(f"{f.name}: {e}")
+            if guardadas:
+                st.success("Guardadas: " + ", ".join(guardadas))
+                st.session_state.pop("_estado_pl_map", None)
+                st.rerun()
+            for err in errores:
+                st.error(err)
+
+        todas = listar_plantillas()
+        propias = listar_plantillas_usuario()
+        ordenadas = []
+        vistos = set()
+        for p in propias + todas:
+            key = str(p.resolve()) if p.exists() else str(p)
+            if key in vistos:
+                continue
+            vistos.add(key)
+            ordenadas.append(p)
+
+        labels_pl = []
+        path_by_label: dict[str, Path] = {}
+        for p in ordenadas:
+            fuente = "adjuntada" if es_plantilla_usuario(p) else "pack"
+            lab = f"[{fuente}] {p.name}"
+            labels_pl.append(lab)
+            path_by_label[lab] = p
+
+        elegidas = st.multiselect(
+            "Plantillas disponibles (marca una o varias)",
+            options=labels_pl,
+            default=[],
+            key="pl_multisel_gen",
+            help="Selecciona las plantillas que quieres usar en este lote.",
+        )
+        pool_elegidas = [path_by_label[l] for l in elegidas if l in path_by_label]
+        if not pool_elegidas and propias:
+            st.info(
+                "No marcaste plantillas del listado. "
+                "Si ya adjuntaste alguna en Plantillas, aparecerá abajo al asignar."
+            )
+
+        pool_asig = pool_elegidas if pool_elegidas else ordenadas
+
+        if not codigos_sel:
+            st.warning("Marca documentos en la columna Sel para asignarles plantilla.")
+        else:
+            docs_by_cod = {d["codigo"]: d for d in docs}
+            misma = st.selectbox(
+                "Aplicar la misma plantilla a todos (mismo formato)",
+                ["(No aplicar)"]
+                + [
+                    f"[{'adjuntada' if es_plantilla_usuario(p) else 'pack'}] {p.name}"
+                    for p in pool_asig
+                ],
+                key="pl_misma_todos",
+            )
+            if misma != "(No aplicar)" and st.button(
+                "Aplicar a seleccionados", key="btn_pl_misma"
+            ):
+                st.session_state["pl_map_gen"] = {c: misma for c in codigos_sel}
+                st.rerun()
+
+            mapa_prev = dict(st.session_state.get("pl_map_gen", {}))
+            st.markdown("**Asignar plantilla por documento**")
+            for codigo in codigos_sel:
+                doc = docs_by_cod.get(codigo) or {}
+                fmt = doc.get("formato") or ""
+                opciones = ["(Automática)"]
+                path_opts: dict[str, Path] = {}
+                for p in pool_asig:
+                    if fmt == "Word" and p.suffix.lower() != ".docx":
+                        continue
+                    if fmt == "Excel" and p.suffix.lower() != ".xlsx":
+                        continue
+                    lab = f"[{'adjuntada' if es_plantilla_usuario(p) else 'pack'}] {p.name}"
+                    opciones.append(lab)
+                    path_opts[lab] = p
+                default_lab = mapa_prev.get(codigo, "(Automática)")
+                if default_lab not in opciones:
+                    auto_p = encontrar_plantilla(doc) if doc else None
+                    if auto_p:
+                        lab_auto = (
+                            f"[{'adjuntada' if es_plantilla_usuario(auto_p) else 'pack'}] "
+                            f"{auto_p.name}"
+                        )
+                        default_lab = lab_auto if lab_auto in opciones else "(Automática)"
+                    else:
+                        default_lab = "(Automática)"
+                idx = opciones.index(default_lab) if default_lab in opciones else 0
+                elegido = st.selectbox(
+                    f"{codigo} — {(doc.get('nombre') or '')[:55]}",
+                    opciones,
+                    index=idx,
+                    key=f"pl_asig_{codigo}",
+                )
+                mapa_prev[codigo] = elegido
+                if elegido != "(Automática)" and elegido in path_opts:
+                    plantilla_overrides[codigo] = str(path_opts[elegido])
+            st.session_state["pl_map_gen"] = mapa_prev
+            if plantilla_overrides:
+                st.caption(
+                    f"{len(plantilla_overrides)} documento(s) con plantilla forzada; "
+                    "el resto usará coincidencia automática."
+                )
+
+    c_gen_top, c_save_top, c_all_top = st.columns([2, 2, 2])
+
+    with c_gen_top:
+        gen_btn_top = st.button(
+            f"Generar seleccionados ({len(codigos_sel)})",
+            type="primary",
+            disabled=not codigos_sel,
+            key="gen_sel_top",
+            use_container_width=True,
+        )
+    with c_save_top:
+        save_ver_btn_top = st.button(
+            "Guardar versión en seleccionados",
+            disabled=not codigos_sel,
+            key="save_ver_top",
+            use_container_width=True,
+            help="Actualiza la versión sin generar.",
+        )
+    with c_all_top:
+        gen_all_top = st.button(
+            f"Generar todo el catálogo ({len(docs)})",
+            key="gen_all_top",
+            use_container_width=True,
+        )
+    codigos_sel_top = list(codigos_sel)
+
     def _args_version(doc_codigo: str) -> dict:
         if modo_version == "Usar versión indicada":
             return {"version": int(version_manual), "auto_bump": False}
@@ -589,11 +1065,16 @@ def pagina_catalogo():
                 f"Generando {codigo} -> NNN {numero:03d} ({i + 1}/{len(codigos)})"
             )
             try:
+                kwargs = dict(_args_version(codigo))
+                if forzar_sin:
+                    kwargs["forzar_sin_plantilla"] = True
+                elif codigo in plantilla_overrides:
+                    kwargs["plantilla_path"] = plantilla_overrides[codigo]
                 res = generar_documento(
                     codigo,
                     fecha=fecha_str,
                     numero_asignado=numero,
-                    **_args_version(codigo),
+                    **kwargs,
                 )
                 generados.append(
                     {
@@ -623,33 +1104,44 @@ def pagina_catalogo():
         )
         st.rerun()
 
+    # Acciones (tambien debajo de la tabla, por si se edito Sel)
+    st.markdown("#### Acciones")
     c_gen, c_save_ver = st.columns(2)
     with c_gen:
         gen_btn = st.button(
             f"Generar seleccionados ({len(codigos_sel)})",
             type="primary",
             disabled=not codigos_sel,
+            key="gen_sel_bottom",
+            use_container_width=True,
         )
     with c_save_ver:
         save_ver_btn = st.button(
             "Guardar versión en seleccionados",
             disabled=not codigos_sel,
+            key="save_ver_bottom",
+            use_container_width=True,
             help="Actualiza la versión de los documentos marcados sin generarlos.",
         )
 
-    if save_ver_btn and codigos_sel:
+    if (save_ver_btn or save_ver_btn_top) and (codigos_sel or codigos_sel_top):
+        destino = codigos_sel if (save_ver_btn and codigos_sel) else codigos_sel_top
         try:
-            for codigo in codigos_sel:
+            for codigo in destino:
                 db.set_version(codigo, int(version_manual))
             st.success(
-                f"Versión v{int(version_manual)} guardada en {len(codigos_sel)} documento(s)."
+                f"Versión v{int(version_manual)} guardada en {len(destino)} documento(s)."
             )
             st.rerun()
         except Exception as e:
             st.error(f"Error: {e}")
 
-    if gen_btn:
+    if gen_btn_top and codigos_sel_top:
+        _generar_lista(codigos_sel_top)
+    if gen_btn and codigos_sel:
         _generar_lista(codigos_sel)
+    if gen_all_top:
+        _generar_lista([d["codigo"] for d in docs])
 
     st.divider()
     st.subheader("Generar todos")
@@ -842,40 +1334,24 @@ def pagina_historial():
 
 
 def main():
-    _barra_lateral()
-    st.title("SG-SST - Gestión documental")
-    emp = db.get_empresa()
-    st.caption(
-        f"Empresa activa: {emp.get('razon_social') or '-'} | NIT {emp.get('nit') or '-'}. "
-        "Historial y numeración son por empresa."
-    )
-    if "bienvenida_ok" not in st.session_state:
-        st.session_state["bienvenida_ok"] = False
-    if not st.session_state["bienvenida_ok"]:
-        with st.expander("Bienvenida / cómo empezar", expanded=not bool(emp.get("razon_social"))):
-            st.markdown(
-                "Esta app genera documentos del **SG-SST** con códigos "
-                "`SST-SG-[ABR]-[NNN]`.\n\n"
-                "1. Configura tu **empresa** (logo y datos).\n"
-                "2. Revisa **plantillas** (pack base + las tuyas).\n"
-                "3. En **catálogo**, marca documentos y genera.\n"
-                "4. **Descarga** los archivos (ZIP o uno a uno).\n"
-            )
-            if st.button("Entendido, no mostrar de nuevo"):
-                st.session_state["bienvenida_ok"] = True
-                st.rerun()
+    _aplicar_estilo()
+    pagina = _barra_lateral()
+    if pagina != "Empresa":
+        st.title("SG-SST - Gestión documental")
+        emp = db.get_empresa()
+        st.caption(
+            f"Empresa activa: {emp.get('razon_social') or '-'} | NIT {emp.get('nit') or '-'}."
+        )
 
-    tab1, tab2, tab3, tab4 = st.tabs(
-        ["Empresa", "Plantillas", "Catálogo / Generar", "Historial"]
-    )
-    with tab1:
+    if pagina == "Empresa":
         pagina_empresa()
-    with tab2:
+    elif pagina == "Plantillas":
         pagina_plantillas()
-    with tab3:
+    elif pagina.startswith("Cat"):
         pagina_catalogo()
-    with tab4:
+    else:
         pagina_historial()
+
 
 
 if __name__ == "__main__":
