@@ -16,6 +16,23 @@ MAPEO_PATH = db.PLANTILLAS_DIR / "mapeo_usuario.json"
 
 EXT_OK = {".docx", ".xlsx"}
 
+# Cache de listados (el rglob del pack es lento; no reescanear por cada documento)
+_PL_CACHE: dict[str, list[Path]] = {}
+
+
+def invalidar_cache_plantillas() -> None:
+    _PL_CACHE.clear()
+
+
+def _cache_get(key: str):
+    return _PL_CACHE.get(key)
+
+
+def _cache_set(key: str, value: list[Path]) -> list[Path]:
+    _PL_CACHE[key] = value
+    return value
+
+
 
 def _norm(texto: str) -> str:
     t = (texto or "").upper()
@@ -80,6 +97,9 @@ def dirs_plantillas() -> list[Path]:
 
 def listar_plantillas_usuario() -> list[Path]:
     """Solo archivos en plantillas/usuario."""
+    cached = _cache_get("usuario")
+    if cached is not None:
+        return list(cached)
     USUARIO_DIR.mkdir(parents=True, exist_ok=True)
     files: list[Path] = []
     for p in USUARIO_DIR.rglob("*"):
@@ -90,10 +110,16 @@ def listar_plantillas_usuario() -> list[Path]:
         if p.name.startswith("~$"):
             continue
         files.append(p)
-    return sorted(files, key=lambda x: x.name.lower())
+    files = sorted(files, key=lambda x: x.name.lower())
+    return _cache_set("usuario", files)
 
 
 def listar_plantillas() -> list[Path]:
+    modo = db.get_modo_plantillas()
+    cache_key = f"todas:{modo}"
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        return list(cached)
     vistos: set[str] = set()
     files: list[Path] = []
     for d in dirs_plantillas():
@@ -106,14 +132,17 @@ def listar_plantillas() -> list[Path]:
                 continue
             if p.name.startswith("~$"):
                 continue
-            # En modo solo_usuario, dirs_plantillas ya filtra;
-            # si se lista PLANTILLAS_DIR en modo todas, omitir subcarpeta usuario duplicada
-            key = str(p.resolve()).lower()
+            # Evitar resolve() (lento / falla con rutas largas en Windows)
+            try:
+                key = str(p).lower()
+            except OSError:
+                continue
             if key in vistos:
                 continue
             vistos.add(key)
             files.append(p)
-    return sorted(files, key=lambda x: x.name.lower())
+    files = sorted(files, key=lambda x: x.name.lower())
+    return _cache_set(cache_key, files)
 
 
 def es_plantilla_usuario(path: Path) -> bool:
@@ -359,10 +388,14 @@ def _score_nombre(doc: dict[str, Any], path: Path) -> int:
     return score
 
 
-def encontrar_plantilla(doc: dict[str, Any]) -> Optional[Path]:
+def encontrar_plantilla(
+    doc: dict[str, Any],
+    pool: Optional[list[Path]] = None,
+) -> Optional[Path]:
     """Prioridad: mapeo usuario > FG-FOR-SST > palabras clave.
 
     Si modo_plantillas = solo_usuario, ignora el pack base de la app.
+    Pasa `pool` para no reescanear el disco en bucles (catalogo).
     """
     solo_usuario = db.get_modo_plantillas() == "solo_usuario"
     codigo_cat = doc.get("codigo") or ""
@@ -372,15 +405,17 @@ def encontrar_plantilla(doc: dict[str, Any]) -> Optional[Path]:
         if p.exists() and (not solo_usuario or es_plantilla_usuario(p)):
             return p
 
+    pool = list(pool) if pool is not None else listar_plantillas()
+    propias = [p for p in pool if es_plantilla_usuario(p)] if pool else listar_plantillas_usuario()
+
     # Prefijo en nombre de archivo usuario: SST-SG-XXX-001__archivo.docx
-    for p in listar_plantillas_usuario() if solo_usuario else listar_plantillas():
-        if es_plantilla_usuario(p) and p.name.startswith(f"{codigo_cat}__"):
+    for p in propias:
+        if p.name.startswith(f"{codigo_cat}__"):
             return p
 
     n_doc = numero_fg(codigo_origen_doc(doc) or "")
     fmt = doc.get("formato") or ""
     candidatos_fg: list[Path] = []
-    pool = listar_plantillas()
     if n_doc is not None:
         for p in pool:
             if solo_usuario and not es_plantilla_usuario(p):
@@ -422,9 +457,10 @@ def encontrar_plantilla(doc: dict[str, Any]) -> Optional[Path]:
 
 def estado_plantillas_catalogo() -> list[dict[str, Any]]:
     solo = db.get_modo_plantillas() == "solo_usuario"
+    pool = listar_plantillas()
     rows = []
     for doc in db.list_catalogo():
-        plantilla = encontrar_plantilla(doc)
+        plantilla = encontrar_plantilla(doc, pool=pool)
         origen = codigo_origen_doc(doc) or ""
         if plantilla:
             fuente = "adjuntada" if es_plantilla_usuario(plantilla) else "pack base"
@@ -433,9 +469,9 @@ def estado_plantillas_catalogo() -> list[dict[str, Any]]:
         else:
             tiene = "NO"
             if solo:
-                plantilla_txt = "(sin adjunto; se generará desde cero)"
+                plantilla_txt = "(sin adjunto; se generara desde cero)"
             else:
-                plantilla_txt = "(sin match; se generará desde cero)"
+                plantilla_txt = "(sin match; se generara desde cero)"
         rows.append(
             {
                 "codigo": doc["codigo"],

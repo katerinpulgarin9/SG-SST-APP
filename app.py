@@ -19,7 +19,10 @@ from PIL import Image
 from generador import db
 from generador.motor import estado_plantillas_catalogo, generar_documento, listar_plantillas
 from generador.normativa import NORMATIVA
-from generador.plantillas_index import carpeta_base_gestion_documental
+from generador.plantillas_index import (
+    carpeta_base_gestion_documental,
+    invalidar_cache_plantillas,
+)
 
 st.set_page_config(
     page_title="SG-SST - Gestión documental",
@@ -519,6 +522,7 @@ def pagina_plantillas():
     nuevo_modo = "todas" if modo_label.startswith("Pack base") else "solo_usuario"
     if nuevo_modo != modo_actual:
         db.set_modo_plantillas(nuevo_modo)
+        invalidar_cache_plantillas()
         st.session_state.pop("_estado_pl_map", None)
         st.rerun()
 
@@ -761,15 +765,31 @@ def pagina_catalogo():
     st.markdown("#### Lista del catálogo")
     st.caption("Desplázate en la tabla. Marca **Sel** para elegir documentos.")
 
-    # Mapa codigo -> tiene plantilla (SI/NO), cache por sesion
+    # Mapa codigo -> plantilla: NO calcular al abrir (es lento).
+    # Por defecto "?" y se calcula solo si el usuario lo pide.
     if "_estado_pl_map" not in st.session_state:
-        try:
-            st.session_state["_estado_pl_map"] = {
-                r["codigo"]: r.get("tiene_plantilla", "NO")
-                for r in estado_plantillas_catalogo()
-            }
-        except Exception:
-            st.session_state["_estado_pl_map"] = {}
+        st.session_state["_estado_pl_map"] = {}
+    c_pl_calc, c_pl_hint = st.columns([1, 3])
+    with c_pl_calc:
+        if st.button("Calcular plantillas SI/NO", key="btn_calc_pl_map"):
+            try:
+                with st.spinner("Emparejando plantillas (solo la primera vez tarda)..."):
+                    st.session_state["_estado_pl_map"] = {
+                        r["codigo"]: r.get("tiene_plantilla", "NO")
+                        for r in estado_plantillas_catalogo()
+                    }
+                st.success("Coincidencias de plantilla actualizadas.")
+            except Exception as e:
+                st.session_state["_estado_pl_map"] = {}
+                st.warning(f"No se pudo calcular plantillas: {e}")
+    with c_pl_hint:
+        if st.session_state["_estado_pl_map"]:
+            st.caption("Columna Plantilla: SI/NO segun coincidencia actual.")
+        else:
+            st.caption(
+                "La lista carga al instante. Usa **Calcular plantillas SI/NO** "
+                "si quieres ver que documentos tienen plantilla (opcional)."
+            )
     _estado_pl = st.session_state["_estado_pl_map"]
 
     df = pd.DataFrame(
@@ -889,16 +909,28 @@ def pagina_catalogo():
             for err in errores:
                 st.error(err)
 
-        todas = listar_plantillas()
+        from generador.plantillas_index import listar_plantillas as _listar_todas
+
         propias = listar_plantillas_usuario()
+        incluir_pack = st.checkbox(
+            "Incluir plantillas del pack base en el listado (puede tardar)",
+            value=False,
+            key="pl_incluir_pack_gen",
+        )
+        pack = _listar_todas() if incluir_pack else []
         ordenadas = []
         vistos = set()
-        for p in propias + todas:
-            key = str(p.resolve()) if p.exists() else str(p)
+        for p in propias + pack:
+            key = str(p)
             if key in vistos:
                 continue
             vistos.add(key)
             ordenadas.append(p)
+        if not ordenadas:
+            st.info(
+                "No hay plantillas adjuntadas. Sube alguna arriba "
+                "o marca incluir pack base."
+            )
 
         labels_pl = []
         path_by_label: dict[str, Path] = {}
