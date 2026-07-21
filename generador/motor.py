@@ -126,12 +126,18 @@ def add_word_header(doc: Document, empresa: dict, titulo: str, codigo: str, vers
 
 
 def add_word_signatures(doc: Document, empresa: dict, include_vigia: bool = True) -> None:
-    doc.add_paragraph()
+    """Bloque compacto de firmas al final (no debe dominar la primera pagina)."""
+    p_title = doc.add_paragraph()
+    r_title = p_title.add_run("FIRMAS")
+    r_title.bold = True
+    r_title.font.size = Pt(11)
+    _force_black(r_title)
+
     cols = 3 if include_vigia else 2
-    table = doc.add_table(rows=5, cols=cols)
+    table = doc.add_table(rows=4, cols=cols)
     _table_borders(table)
 
-    headers = ["Elabor?", "Aprob?"]
+    headers = ["Elabor\u00f3", "Aprob\u00f3"]
     names = [
         empresa.get("resp_sst_nombre") or "________________",
         empresa.get("rep_legal_nombre") or "________________",
@@ -141,33 +147,63 @@ def add_word_signatures(doc: Document, empresa: dict, include_vigia: bool = True
         empresa.get("rep_legal_cargo") or "Representante legal",
     ]
     if include_vigia:
-        headers.append("Revis?")
+        headers.append("Revis\u00f3")
         vigia = (empresa.get("vigia_nombre") or "").strip()
         names.append(vigia if vigia else "________________")
-        cargos.append("Vig?a en SST")
+        cargos.append("Vig\u00eda en SST")
 
     for i, h in enumerate(headers):
         cell = table.cell(0, i)
         cell.text = ""
         run = cell.paragraphs[0].add_run(h)
         run.bold = True
+        run.font.size = Pt(9)
         _force_black(run)
 
     rows = [
         [f"Nombre: {n}" for n in names],
         [f"Cargo: {c}" for c in cargos],
-        ["Firma: _______________________"] * cols,
-        ["Fecha: _______________________"] * cols,
+        ["Firma / Fecha: ______________"] * cols,
     ]
     for ri, vals in enumerate(rows, start=1):
         for ci, val in enumerate(vals):
-            table.cell(ri, ci).text = val
+            cell = table.cell(ri, ci)
+            cell.text = ""
+            run = cell.paragraphs[0].add_run(val)
+            run.font.size = Pt(8)
+            _force_black(run)
 
 
-def generar_word_desde_cero(empresa: dict, doc_meta: dict, version: int, fecha: str, out_path: Path) -> Path:
-    document = Document()
-    add_word_header(document, empresa, doc_meta["nombre"], doc_meta["codigo"], version, fecha)
-    for heading, paragraphs in secciones_familia(doc_meta["familia"], empresa, doc_meta["nombre"]):
+def _include_vigia(doc_meta: dict) -> bool:
+    fam = (doc_meta.get("familia") or "").lower()
+    nombre = (doc_meta.get("nombre") or "").lower()
+    if fam in {"matriz", "plan", "formato", "programa", "evaluacion"}:
+        return True
+    keys = ("emergencia", "epp", "inspeccion", "inspecci\u00f3n", "peligro", "riesgo")
+    return any(k in nombre for k in keys)
+
+
+def _contar_parrafos_utiles(doc: Document) -> int:
+    """Cuenta parrafos con texto sustancial (cuerpo, no solo titulos cortos)."""
+    n = 0
+    for p in doc.paragraphs:
+        t = (p.text or "").strip()
+        if len(t) >= 40:
+            n += 1
+    for table in doc.tables:
+        for row in table.rows:
+            for cell in row.cells:
+                for p in cell.paragraphs:
+                    t = (p.text or "").strip()
+                    if len(t) >= 40:
+                        n += 1
+    return n
+
+
+def _agregar_secciones_word(document: Document, empresa: dict, doc_meta: dict) -> None:
+    for heading, paragraphs in secciones_familia(
+        doc_meta.get("familia") or "", empresa, doc_meta.get("nombre") or ""
+    ):
         p = document.add_paragraph()
         run = p.add_run(heading)
         run.bold = True
@@ -175,20 +211,42 @@ def generar_word_desde_cero(empresa: dict, doc_meta: dict, version: int, fecha: 
         _force_black(run)
         for text in paragraphs:
             document.add_paragraph(text)
-    include_vigia = doc_meta["familia"] in {"matriz", "plan", "formato"} or "emergencia" in doc_meta["nombre"].lower() or "epp" in doc_meta["nombre"].lower() or "inspeccion" in doc_meta["nombre"].lower() or "inspecci?n" in doc_meta["nombre"].lower()
-    add_word_signatures(document, empresa, include_vigia=include_vigia)
+
+
+MIN_PARRAFOS_PLANTILLA = 15
+
+
+def generar_word_desde_cero(empresa: dict, doc_meta: dict, version: int, fecha: str, out_path: Path) -> Path:
+    document = Document()
+    add_word_header(document, empresa, doc_meta["nombre"], doc_meta["codigo"], version, fecha)
+    _agregar_secciones_word(document, empresa, doc_meta)
+    add_word_signatures(document, empresa, include_vigia=_include_vigia(doc_meta))
     out_path.parent.mkdir(parents=True, exist_ok=True)
     document.save(str(out_path))
     return out_path
 
 
 def generar_word_desde_plantilla(empresa: dict, doc_meta: dict, version: int, fecha: str, plantilla: Path, out_path: Path) -> Path:
-    """Usa la plantilla como base y rellena datos de empresa."""
+    """Usa la plantilla como base; si queda corta, agrega contenido ampliado."""
     try:
-        return rellenar_word(plantilla, empresa, doc_meta, version, fecha, out_path)
+        rellenar_word(plantilla, empresa, doc_meta, version, fecha, out_path)
     except Exception:
         return generar_word_desde_cero(empresa, doc_meta, version, fecha, out_path)
 
+    doc = Document(str(out_path))
+    if _contar_parrafos_utiles(doc) < MIN_PARRAFOS_PLANTILLA:
+        sep = doc.add_paragraph()
+        run = sep.add_run(
+            "CONTENIDO COMPLEMENTARIO DEL SG-SST "
+            "(la plantilla base era breve; se ampl\u00eda para uso operativo)"
+        )
+        run.bold = True
+        run.font.size = Pt(11)
+        _force_black(run)
+        _agregar_secciones_word(doc, empresa, doc_meta)
+        add_word_signatures(doc, empresa, include_vigia=_include_vigia(doc_meta))
+        doc.save(str(out_path))
+    return out_path
 
 
 def _excel_header(ws, empresa: dict, titulo: str, codigo: str, version: int, fecha: str) -> int:
