@@ -463,6 +463,15 @@ def rellenar_word(
     doc.save(str(out_path))
     logo = _logo_path(empresa)
     _scrub_ooxml_file(out_path, ctx, logo_path=logo)
+    # Reparar layouts rotos de plantillas (encuestas con columnas fingidas)
+    try:
+        from generador.layout_encuestas import reparar_layouts_word
+
+        reparar_layouts_word(out_path, fecha=ctx.get("fecha"))
+        # Reaplicar scrub de logo/meta por si el repair reescribio el docx
+        _scrub_ooxml_file(out_path, ctx, logo_path=logo)
+    except Exception:
+        pass
     return out_path
 
 
