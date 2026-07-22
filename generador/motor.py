@@ -32,7 +32,9 @@ from generador.relleno_plantilla import (
     _scrub_ooxml_file,
     _contexto,
     _logo_path,
+    asegurar_marca_excel,
 )
+from generador.encabezado_empresa import inyectar_encabezado_empresa_word
 from generador.colores_marca import colores_desde_logo
 from generador.familias_documento import (
     COLUMNAS_EXCEL,
@@ -257,6 +259,12 @@ def generar_word_desde_cero(empresa: dict, doc_meta: dict, version: int, fecha: 
     add_word_signatures(document, empresa, include_vigia=_include_vigia(doc_meta))
     out_path.parent.mkdir(parents=True, exist_ok=True)
     document.save(str(out_path))
+    try:
+        inyectar_encabezado_empresa_word(
+            out_path, empresa, doc_meta, version, fecha
+        )
+    except Exception:
+        pass
     return out_path
 
 
@@ -286,6 +294,13 @@ def generar_word_desde_plantilla(empresa: dict, doc_meta: dict, version: int, fe
             out_path,
             _contexto(empresa, doc_meta, version, fecha),
             logo_path=_logo_path(empresa),
+        )
+    except Exception:
+        pass
+    # Forzar logo + empresa en encabezado (plantillas no traen razon social/NIT)
+    try:
+        inyectar_encabezado_empresa_word(
+            out_path, empresa, doc_meta, version, fecha
         )
     except Exception:
         pass
@@ -449,6 +464,11 @@ def generar_documento(
     doc_meta = db.get_documento(codigo)
     if not doc_meta:
         raise ValueError(f"No existe el documento {codigo} en el catalogo")
+    if not (empresa.get("razon_social") or "").strip():
+        raise ValueError(
+            "La empresa activa no tiene razon social. "
+            "Ve a Empresa, completa los datos (y el logo) y vuelve a generar."
+        )
 
     fecha = fecha or date.today().strftime("%d/%m/%Y")
     if version is not None:
@@ -509,6 +529,18 @@ def generar_documento(
             else:
                 generar_excel_desde_cero(empresa, doc_gen, version, fecha, out_path)
                 modo = "desde_cero"
+        # Pase final obligatorio: logo + empresa en Word y Excel
+        try:
+            if es_word:
+                inyectar_encabezado_empresa_word(
+                    out_path, empresa, doc_gen, version, fecha
+                )
+            else:
+                asegurar_marca_excel(
+                    out_path, empresa, doc_gen, version, fecha
+                )
+        except Exception:
+            pass
         contenido = out_path.read_bytes()
 
     db.registrar_historial(codigo_final, doc_meta["nombre"], version, nombre_archivo, fecha)

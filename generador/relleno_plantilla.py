@@ -446,18 +446,13 @@ def _scrub_ooxml_file(path: Path, ctx: dict[str, str], logo_path: Path | None = 
             name_l = name.lower()
 
             if name in logo_media_targets or name.replace("\\", "/") in logo_media_targets:
+                # Solo reemplazar si hay logo de empresa; no blanquear el de la plantilla
                 ext = Path(name).suffix.lstrip(".").lower()
-                nuevo_bytes = None
                 if logo_path and logo_path.exists():
                     nuevo_bytes = _logo_bytes_for_ext(logo_path, ext)
-                if nuevo_bytes is None:
-                    try:
-                        nuevo_bytes = _blank_logo_bytes("jpg" if ext == "jpeg" else ext)
-                    except Exception:
-                        nuevo_bytes = None
-                if nuevo_bytes is not None:
-                    data = nuevo_bytes
-                    changed = True
+                    if nuevo_bytes is not None:
+                        data = nuevo_bytes
+                        changed = True
 
             elif name_l.endswith((".xml", ".rels")) and not name_l.endswith(".bin"):
                 try:
@@ -530,6 +525,15 @@ def rellenar_word(
         reparar_layouts_word(out_path, fecha=ctx.get("fecha"))
         # Reaplicar scrub de logo/meta por si el repair reescribio el docx
         _scrub_ooxml_file(out_path, ctx, logo_path=logo)
+    except Exception:
+        pass
+    # Siempre inyectar logo + razon social + NIT en el encabezado
+    try:
+        from generador.encabezado_empresa import inyectar_encabezado_empresa_word
+
+        inyectar_encabezado_empresa_word(
+            out_path, empresa, doc_meta, version, fecha
+        )
     except Exception:
         pass
     return out_path
@@ -737,6 +741,55 @@ def _inyectar_logo_y_empresa_excel(wb, empresa: dict, ctx: dict[str, str]) -> No
                     a1.value = f"{razon}\nNIT: {nit}" if nit else razon
 
 
+def asegurar_marca_excel(
+    out_path: Path | str,
+    empresa: dict,
+    doc_meta: dict,
+    version: int | str,
+    fecha: str,
+) -> None:
+    """Pase final: garantiza logo + empresa en cualquier Excel generado."""
+    path = Path(out_path)
+    if not path.exists():
+        return
+    ver_int = int(version) if str(version).isdigit() else 1
+    ctx = _contexto(empresa, doc_meta, ver_int, str(fecha))
+    ctx["codigo"] = str(doc_meta.get("codigo") or ctx.get("codigo") or "")
+    ctx["version"] = str(version)
+    ctx["fecha"] = str(fecha)
+    ctx["razon_social"] = (empresa.get("razon_social") or "").strip()
+    ctx["nit"] = (empresa.get("nit") or "").strip()
+    wb = load_workbook(path)
+    _inyectar_logo_y_empresa_excel(wb, empresa, ctx)
+    ws = wb.worksheets[0]
+    razon = ctx["razon_social"]
+    nit = ctx["nit"]
+    header_blob = " ".join(
+        str(ws.cell(r, c).value or "")
+        for r in range(1, 5)
+        for c in range(1, min(ws.max_column or 1, 80) + 1)
+    )
+    if razon and razon.lower() not in header_blob.lower():
+        ws.insert_rows(1)
+        ws.cell(
+            1,
+            1,
+            f"EMPRESA: {razon} | NIT: {nit} | Codigo: {ctx['codigo']} | v{version} | {fecha}",
+        )
+    logo = _logo_path(empresa)
+    if logo and not getattr(ws, "_images", None):
+        try:
+            img = XLImage(str(logo))
+            img.width = 96
+            img.height = 58
+            ws.add_image(img, "A1")
+        except Exception:
+            pass
+    path.parent.mkdir(parents=True, exist_ok=True)
+    wb.save(str(path))
+    _scrub_ooxml_file(path, ctx, logo_path=logo)
+
+
 def rellenar_excel(
     plantilla: Path,
     empresa: dict,
@@ -766,4 +819,9 @@ def rellenar_excel(
     wb.save(str(out_path))
     logo = _logo_path(empresa)
     _scrub_ooxml_file(out_path, ctx, logo_path=logo)
+    try:
+        asegurar_marca_excel(out_path, empresa, doc_meta, version, fecha)
+    except Exception:
+        pass
     return out_path
+
