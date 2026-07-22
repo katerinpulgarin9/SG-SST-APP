@@ -527,6 +527,25 @@ def next_consecutivo() -> int:
     return nuevo
 
 
+def _siguiente_numero_catalogo(conn: sqlite3.Connection, abreviatura: str, minimo: int = 1) -> int:
+    """Siguiente numero libre del catalogo (serie global), evitando IntegrityError."""
+    abr = re.sub(r"[^A-Za-z0-9]", "", (abreviatura or "FR").upper())[:12] or "FR"
+    max_global = 0
+    for row in conn.execute("SELECT codigo FROM catalogo"):
+        codigo = row["codigo"] if isinstance(row, sqlite3.Row) else row[0]
+        max_global = max(max_global, _numero_codigo(codigo))
+    n = max(1, int(minimo), max_global + 1)
+    while n <= 9999:
+        codigo = codigo_sst(abr, n)
+        existe = conn.execute(
+            "SELECT 1 FROM catalogo WHERE codigo = ?", (codigo,)
+        ).fetchone()
+        if not existe:
+            return n
+        n += 1
+    raise ValueError("No hay consecutivos libres para esta abreviatura.")
+
+
 def add_documento_catalogo(
     abreviatura: str,
     nombre: str,
@@ -535,17 +554,45 @@ def add_documento_catalogo(
     referencia: str = "",
     version: int = 0,
 ) -> str:
-    n = next_consecutivo()
-    codigo = codigo_sst(abreviatura, n)
+    """Agrega un documento con codigo unico. Evita IntegrityError si el consecutivo esta desfasado."""
+    init_db()
+    abr = re.sub(r"[^A-Za-z0-9]", "", (abreviatura or "FR").upper())[:12] or "FR"
     v = max(0, int(version))
+    eid = get_empresa_activa_id()
     with _conn() as conn:
+        _ensure_consecutivo_row(conn, eid)
+        ultimo = int(
+            conn.execute(
+                "SELECT ultimo FROM consecutivo_empresa WHERE empresa_id = ?",
+                (eid,),
+            ).fetchone()["ultimo"]
+        )
+        n = _siguiente_numero_catalogo(conn, abr, minimo=ultimo + 1)
+        codigo = codigo_sst(abr, n)
+        try:
+            conn.execute(
+                """
+                INSERT INTO catalogo (
+                    codigo, abreviatura, nombre, formato, familia, referencia, version, estado, ruta
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, 'CONFORME', ?)
+                """,
+                (codigo, abr, nombre, formato, familia, referencia, v, referencia),
+            )
+        except sqlite3.IntegrityError:
+            # Reintento por carrera / codigo residual
+            n = _siguiente_numero_catalogo(conn, abr, minimo=n + 1)
+            codigo = codigo_sst(abr, n)
+            conn.execute(
+                """
+                INSERT INTO catalogo (
+                    codigo, abreviatura, nombre, formato, familia, referencia, version, estado, ruta
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, 'CONFORME', ?)
+                """,
+                (codigo, abr, nombre, formato, familia, referencia, v, referencia),
+            )
         conn.execute(
-            """
-            INSERT INTO catalogo (
-                codigo, abreviatura, nombre, formato, familia, referencia, version, estado, ruta
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, 'CONFORME', ?)
-            """,
-            (codigo, abreviatura.upper(), nombre, formato, familia, referencia, v, referencia),
+            "UPDATE consecutivo_empresa SET ultimo = ? WHERE empresa_id = ?",
+            (max(ultimo, n), eid),
         )
     return codigo
 

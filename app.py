@@ -1277,14 +1277,18 @@ def pagina_catalogo():
                 abr, familia, _ = TIPOS[idx]
 
             if abr:
-                codigo = db.add_documento_catalogo(
-                    abr,
-                    nombre.strip(),
-                    formato,
-                    familia,
-                    ref,
-                    version=int(version_nuevo),
-                )
+                try:
+                    codigo = db.add_documento_catalogo(
+                        abr,
+                        nombre.strip(),
+                        formato,
+                        familia,
+                        ref,
+                        version=int(version_nuevo),
+                    )
+                except Exception as e:
+                    st.error(f"No se pudo agregar al catálogo: {e}")
+                    st.stop()
                 if agregar_y_generar:
                     try:
                         res = generar_documento(
